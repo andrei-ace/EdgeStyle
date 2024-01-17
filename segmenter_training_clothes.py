@@ -127,7 +127,7 @@ class TrainableModel(L.LightningModule):
         super().__init__()
         self.loss = DiceCELoss(
             sigmoid=True,
-            squared_pred=True,
+            squared_pred=False,
             reduction="mean",
         )
         self.model = model
@@ -395,28 +395,28 @@ class TrainableModel(L.LightningModule):
         )
         return {"optimizer": optimizer}
 
+def collate_fn(examples):
+    examples_resized = []
+    for example in examples:
+        example = resize(example, 600, 400)
+        examples_resized.append(example)
+
+    images = torch.stack([torch.as_tensor(np.array(example["image"], dtype=np.uint8)) for example in examples_resized])
+    masks = torch.stack([torch.as_tensor(np.array(example["mask"], dtype=np.uint8)) for example in examples_resized])
+    return {"image": images, "mask": masks}
+
 
 def main() -> None:
-    if not os.path.exists("human_parsing_dataset_resized"):
-        dataset = datasets.load_dataset(
-            "mattmdjaga/human_parsing_dataset", split="train[:100%]"
-        )
-
-        dataset = dataset.map(
-            lambda example: resize(example, 600, 400), writer_batch_size=100
-        )
-
-        dataset.save_to_disk("human_parsing_dataset_resized")
-
-    L.seed_everything(42)
-
-    dataset = Dataset.load_from_disk("human_parsing_dataset_resized")
-    dataset = dataset.with_format("torch", columns=["image", "mask"])
+    dataset = datasets.load_dataset(
+        "mattmdjaga/human_parsing_dataset", split="train[:100%]"
+    )
 
     train, val = random_split(dataset, [0.99, 0.01])
 
-    train_loader = DataLoader(train, batch_size=16, shuffle=False, num_workers=4)
-    val_loader = DataLoader(val, batch_size=16, shuffle=False, num_workers=4)
+    train_loader = DataLoader(train, batch_size=16, collate_fn=collate_fn,shuffle=False, num_workers=4)
+    val_loader = DataLoader(val, batch_size=16, collate_fn=collate_fn,shuffle=False, num_workers=4)
+
+    L.seed_everything(42)
 
     model = TrainableModel(
         create_sam_model("l2", pretrained=True, weight_url=WEIGHT_URL)
@@ -431,7 +431,7 @@ def main() -> None:
 
     trainer = L.Trainer(
         devices="auto",
-        max_epochs=50,
+        max_epochs=1,
         overfit_batches=0,
         fast_dev_run=False,
         callbacks=[model_checkpoint_callback],
