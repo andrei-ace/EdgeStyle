@@ -1,5 +1,8 @@
 .vscode/
 __pycache__/
 .mypy_cache/
+data/
 *.pt
 *.pth
+sam_models/
+human_parsing_dataset_resized/

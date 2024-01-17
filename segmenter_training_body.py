@@ -1,14 +1,15 @@
-import copy
 import sys
-from tqdm import tqdm
 import numpy as np
-import datasets
+import os
 from PIL import Image
+import cv2
+
+import datasets
 from datasets import Dataset
 
 import torch
-from torch.optim.lr_scheduler import StepLR
-import torch.optim as optim
+
+from prodigyopt import Prodigy
 
 import torchvision
 from torchvision import transforms
@@ -19,7 +20,7 @@ from torch.utils.data import random_split
 import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint
 
-from monai.losses import DiceCELoss, DiceLoss
+from monai.losses import DiceCELoss
 from segment_anything.modeling.prompt_encoder import PromptEncoder
 from segment_anything.utils.transforms import ResizeLongestSide
 
@@ -32,11 +33,11 @@ from efficientvit.models.efficientvit.sam import (
     SamPad,
 )
 
-torch.set_float32_matmul_precision("high")
+# torch.set_float32_matmul_precision("high")
 
 WEIGHT_URL = "efficientvit/assets/checkpoints/sam/l2.pt"
-MASK_WEIGHT_URL = "efficientvit/assets/checkpoints/sam/mask_decoder.pt"
-TRAINED_WEIGHT_URL = "efficientvit/assets/checkpoints/sam/trained_model.pt"
+MASK_WEIGHT_URL = "efficientvit/assets/checkpoints/sam/mask_decoder_body.pt"
+TRAINED_WEIGHT_URL = "efficientvit/assets/checkpoints/sam/trained_model_body.pt"
 ORIGINAL_SIZE = (600, 400)
 
 # background     0
@@ -59,7 +60,8 @@ ORIGINAL_SIZE = (600, 400)
 # scarf          17
 
 # KEEP_CATEGORIES = [4, 5, 6, 7, 8, 17]
-KEEP_CATEGORIES = [1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16]
+KEEP_CATEGORIES = [1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16, 17]  # face, body and bag
+# KEEP_CATEGORIES = range(1, 18)  # keep all categories except background and bag
 
 
 def resize(example: dict, height: int, width: int) -> dict:
@@ -172,11 +174,12 @@ class TrainableModel(L.LightningModule):
         x_min, x_max = torch.min(x_indices), torch.max(x_indices)
         y_min, y_max = torch.min(y_indices), torch.max(y_indices)
         # add perturbation to bounding box coordinates
+        randoms = np.random.randint(-30, 30, size=4)
         H, W = mask.shape
-        x_min = torch.max(torch.as_tensor(0), x_min - np.random.randint(0, 20)).float()
-        x_max = torch.min(torch.as_tensor(W), x_max + np.random.randint(0, 20)).float()
-        y_min = torch.max(torch.as_tensor(0), y_min - np.random.randint(0, 20)).float()
-        y_max = torch.min(torch.as_tensor(H), y_max + np.random.randint(0, 20)).float()
+        x_min = torch.max(torch.as_tensor(0), x_min + randoms[0]).float()
+        x_max = torch.min(torch.as_tensor(W), x_max + randoms[1]).float()
+        y_min = torch.max(torch.as_tensor(0), y_min + randoms[2]).float()
+        y_max = torch.min(torch.as_tensor(H), y_max + randoms[3]).float()
         bbox = [x_min, y_min, x_max, y_max]
         return torch.stack(bbox, dim=0)
 
@@ -208,13 +211,38 @@ class TrainableModel(L.LightningModule):
             low_res_masks, self.input_size, self.original_size
         )
 
+    def smooth_mask(self, mask, kernel_size=3, iterations=3):
+        # Convert the mask from boolean to binary format (0 or 255)
+        binary_mask = np.uint8(mask * 255)
+
+        # Define the kernel for morphological operations
+        kernel = np.ones((kernel_size, kernel_size), np.uint8)
+
+        # Apply closing (dilation followed by erosion) to fill gaps
+        closed = cv2.dilate(binary_mask, kernel, iterations=iterations)
+        closed = cv2.erode(closed, kernel, iterations=iterations)
+
+        # Apply opening (erosion followed by dilation) to remove isolated pixels
+        opened = cv2.erode(closed, kernel, iterations=iterations)
+        smoothed_mask = cv2.dilate(opened, kernel, iterations=iterations)
+
+        # Convert back to boolean format and return
+        return smoothed_mask > 0
+
     def apply_conditions(self, masks):
         # Create a condition tensor
         condition = torch.any(
             torch.stack([masks == category for category in KEEP_CATEGORIES]),
             dim=0,
         )
-        return (masks * condition) > 0
+        masks = (masks * condition) > 0
+
+        masks_as_np = masks.cpu().numpy()
+
+        for i, mask in enumerate(masks_as_np):
+            masks_as_np[i] = self.smooth_mask(mask)
+
+        return torch.as_tensor(masks_as_np).to(device=masks.device)
 
     @torch.inference_mode()
     def training_step_frozen(self, batch, batch_idx):
@@ -246,8 +274,6 @@ class TrainableModel(L.LightningModule):
         return features, sparse_embeddings, dense_embeddings
 
     def training_step(self, batch, batch_idx):
-        if batch_idx == 0:
-            self.first_batch = batch
         masks = batch["mask"]
 
         features, sparse_embeddings, dense_embeddings = self.training_step_frozen(
@@ -264,7 +290,7 @@ class TrainableModel(L.LightningModule):
 
         loss = self.loss(predicted_masks.unsqueeze(1), masks.unsqueeze(1))
 
-        self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("train_loss", loss, prog_bar=True)
 
         return loss
 
@@ -315,13 +341,14 @@ class TrainableModel(L.LightningModule):
             image_grid_groud_truth = torchvision.utils.make_grid(
                 images_with_mask_ground_truth, nrow=grid_size
             )
-            # Log image and mask
+
             self.logger.experiment.add_image(
                 "image",
                 image_grid,
                 self.current_epoch,
                 dataformats="CHW",
             )
+
             # Log image and mask
             self.logger.experiment.add_image(
                 "image_groud_truth",
@@ -335,6 +362,8 @@ class TrainableModel(L.LightningModule):
     # save image to tensorboard
 
     def validation_step(self, batch, batch_idx):
+        if batch_idx == 0:
+            self.first_batch = batch
         masks = batch["mask"]
 
         features, sparse_embeddings, dense_embeddings = self.training_step_frozen(
@@ -356,28 +385,35 @@ class TrainableModel(L.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=0.001)
-        scheduler = StepLR(optimizer, step_size=10, gamma=0.1)
-        return {"optimizer": optimizer, "lr_scheduler": scheduler}
+        optimizer = Prodigy(
+            self.parameters(),
+            lr=1.0,
+            weight_decay=0.01,
+            safeguard_warmup=True,
+            use_bias_correction=True,
+            betas=(0.9, 0.99),
+        )
+        return {"optimizer": optimizer}
 
 
 def main() -> None:
-    # dataset = datasets.load_dataset(
-    #     "mattmdjaga/human_parsing_dataset", split="train[:100%]"
-    # )
+    if not os.path.exists("human_parsing_dataset_resized"):
+        dataset = datasets.load_dataset(
+            "mattmdjaga/human_parsing_dataset", split="train[:100%]"
+        )
 
-    # dataset = dataset.map(
-    #     lambda example: resize(example, 600, 400), writer_batch_size=100
-    # )
+        dataset = dataset.map(
+            lambda example: resize(example, 600, 400), writer_batch_size=100
+        )
 
-    # dataset.save_to_disk("dataset_resized")
+        dataset.save_to_disk("human_parsing_dataset_resized")
 
     L.seed_everything(42)
 
-    dataset = Dataset.load_from_disk("dataset_resized")
+    dataset = Dataset.load_from_disk("human_parsing_dataset_resized")
     dataset = dataset.with_format("torch", columns=["image", "mask"])
 
-    train, val = random_split(dataset, [0.9, 0.1])
+    train, val = random_split(dataset, [0.99, 0.01])
 
     train_loader = DataLoader(train, batch_size=16, shuffle=False, num_workers=4)
     val_loader = DataLoader(val, batch_size=16, shuffle=False, num_workers=4)
@@ -395,16 +431,16 @@ def main() -> None:
 
     trainer = L.Trainer(
         devices="auto",
-        max_epochs=30,
+        max_epochs=50,
         overfit_batches=0,
         fast_dev_run=False,
         callbacks=[model_checkpoint_callback],
+        default_root_dir="./sam_models/sam_body",
     )
     trainer.fit(
         model,
         train_loader,
         val_loader,
-        # ckpt_path="lightning_logs/version_1/checkpoints/epoch=17-step=17928.ckpt",
     )
 
     # take the best model
