@@ -395,14 +395,25 @@ class TrainableModel(L.LightningModule):
         )
         return {"optimizer": optimizer}
 
+
 def collate_fn(examples):
     examples_resized = []
     for example in examples:
         example = resize(example, 600, 400)
         examples_resized.append(example)
 
-    images = torch.stack([torch.as_tensor(np.array(example["image"], dtype=np.uint8)) for example in examples_resized])
-    masks = torch.stack([torch.as_tensor(np.array(example["mask"], dtype=np.uint8)) for example in examples_resized])
+    images = torch.stack(
+        [
+            torch.as_tensor(np.array(example["image"], dtype=np.uint8))
+            for example in examples_resized
+        ]
+    )
+    masks = torch.stack(
+        [
+            torch.as_tensor(np.array(example["mask"], dtype=np.uint8))
+            for example in examples_resized
+        ]
+    )
     return {"image": images, "mask": masks}
 
 
@@ -413,8 +424,12 @@ def main() -> None:
 
     train, val = random_split(dataset, [0.99, 0.01])
 
-    train_loader = DataLoader(train, batch_size=16, collate_fn=collate_fn,shuffle=False, num_workers=4)
-    val_loader = DataLoader(val, batch_size=16, collate_fn=collate_fn,shuffle=False, num_workers=4)
+    train_loader = DataLoader(
+        train, batch_size=16, collate_fn=collate_fn, shuffle=False, num_workers=4
+    )
+    val_loader = DataLoader(
+        val, batch_size=16, collate_fn=collate_fn, shuffle=False, num_workers=4
+    )
 
     L.seed_everything(42)
 
@@ -437,11 +452,7 @@ def main() -> None:
         callbacks=[model_checkpoint_callback],
         default_root_dir="./sam_models/sam_clothes",
     )
-    trainer.fit(
-        model,
-        train_loader,
-        val_loader,
-    )
+    trainer.fit(model, train_loader, val_loader)
 
     # take the best model
     model = TrainableModel.load_from_checkpoint(
