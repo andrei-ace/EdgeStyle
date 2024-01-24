@@ -2,13 +2,17 @@ import os
 from PIL import Image
 from dataset import edgestyle_dataset, edgestyle_dataset_test
 import torch
-from torchvision import transforms
 from tqdm import tqdm
 import math
 
-DATASET_PATH = "./view_dataset"
+from utils import PairedTransform, InverseEmbeddings
 
-BATCH_SIZE = 64
+from transformers import AutoTokenizer
+
+DATASET_PATH = "./temp/inspect_dataset"
+
+BATCH_SIZE = 32
+RESOLUTION = 512
 
 
 def image_grid(imgs, rows, cols):
@@ -25,40 +29,59 @@ def image_grid(imgs, rows, cols):
 
 def collate_fn(examples):
     original = [example["original"] for example in examples]
-    target = [example["target"] for example in examples]
     agnostic = [example["agnostic"] for example in examples]
     mask = [example["mask"] for example in examples]
-    clothes = [example["clothes"] for example in examples]
     original_openpose = [example["original_openpose"] for example in examples]
+
+    target = [example["target"] for example in examples]
+    clothes = [example["clothes"] for example in examples]
     clothes_openpose = [example["clothes_openpose"] for example in examples]
+
+    input_ids = [example["input_ids"] for example in examples]
+
+    target_transformed = []
+    clothes_transformed = []
+    clothes_openpose_transformed = []
+    transform = PairedTransform(
+        RESOLUTION, ((127, 127, 127), (127, 127, 127), (0, 0, 0))
+    )
+    for target_image, clothes_image, clothes_openpose_image in zip(
+        target, clothes, clothes_openpose
+    ):
+        target_image, clothes_image, clothes_openpose_image = transform(
+            [target_image, clothes_image, clothes_openpose_image]
+        )
+        target_transformed.append(target_image)
+        clothes_transformed.append(clothes_image)
+        clothes_openpose_transformed.append(clothes_openpose_image)
+
     input_ids = [example["input_ids"] for example in examples]
 
     return {
         "original": original,
-        "target": target,
         "agnostic": agnostic,
         "mask": mask,
         "original_openpose": original_openpose,
-        "clothes": clothes,
-        "clothes_openpose": clothes_openpose,
+        "target": target_transformed,
+        "clothes": clothes_openpose_transformed,
+        "clothes_openpose": clothes_openpose_transformed,
         "input_ids": input_ids,
     }
 
 
 if __name__ == "__main__":
-    # if not os.path.exists(DATASET_PATH):
     os.makedirs(DATASET_PATH, exist_ok=True)
     train_dataloader = torch.utils.data.DataLoader(
         edgestyle_dataset,
         collate_fn=collate_fn,
-        shuffle=True,
+        shuffle=False,
         batch_size=BATCH_SIZE,
         num_workers=0,
     )
     test_dataloader = torch.utils.data.DataLoader(
         edgestyle_dataset_test,
         collate_fn=collate_fn,
-        shuffle=True,
+        shuffle=False,
         batch_size=BATCH_SIZE,
         num_workers=0,
     )
@@ -72,7 +95,7 @@ if __name__ == "__main__":
         images_flatten = [img for pair in images for img in pair]
 
         image_grid(images_flatten, math.ceil(BATCH_SIZE / 4), 8).save(
-            os.path.join(DATASET_PATH, f"test_{step}.png")
+            os.path.join(DATASET_PATH, f"test_{step:03d}.png")
         )
     for step, batch in tqdm(enumerate(train_dataloader)):
         # print(step, batch)
@@ -84,5 +107,5 @@ if __name__ == "__main__":
         images_flatten = [img for pair in images for img in pair]
 
         image_grid(images_flatten, math.ceil(BATCH_SIZE / 4), 8).save(
-            os.path.join(DATASET_PATH, f"train_{step}.png")
+            os.path.join(DATASET_PATH, f"train_{step:03d}.png")
         )

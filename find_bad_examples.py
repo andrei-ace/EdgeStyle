@@ -11,19 +11,27 @@ from torchmetrics.multimodal import CLIPImageQualityAssessment
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BATCH_SIZE = 64
 IMAGES_PATH = "./data/image"
+BAD_IMAGE_DIR = "./temp/bad_images"
 RESOLUTION = 512
-BAD_IMAGE_THRESHOLD = 0.19
-NUMBER_OF_BAD_IMAGES = 32
+BAD_IMAGE_THRESHOLD = 0.5
+NUMBER_OF_BAD_IMAGES = 64
+
+SUBDIR = "subject"
+# SUBDIR = "clothes"
 
 prompts = (
     # "real",
+    # "natural",
     # "sharpness",
-    # ("one", "two"),
+    ("one", "two"),
+    ("single", "multiple"),
     # ("high definition", "low resolution"),
     # ("Good photo of a person", "Pixelated photo with low resolution"),
     # ("", "umbrella"),
     # ("", "car"),
-    ("", "chair"),
+    # ("", "furniture"),
+    # ("", "chair"),
+    # ("", "pixelated"),
 )
 
 
@@ -85,7 +93,7 @@ if __name__ == "__main__":
     for data_dir in tqdm(data_dirs):
         filenames = [
             filename
-            for filename in os.listdir(os.path.join(data_dir, "subject"))
+            for filename in os.listdir(os.path.join(data_dir, SUBDIR))
             if filename.endswith(".jpg")
         ]
 
@@ -104,7 +112,7 @@ if __name__ == "__main__":
         batch = data.iloc[i : i + BATCH_SIZE]
         batch_images = []
         for image_name, directory in zip(batch["image"], batch["directory"]):
-            image_path = os.path.join(directory, "subject", image_name)
+            image_path = os.path.join(directory, SUBDIR, image_name)
             image = Image.open(image_path).convert("RGB")
             image = transforms.Resize((RESOLUTION, RESOLUTION))(image)
             image = transforms.ToTensor()(image)
@@ -147,7 +155,7 @@ if __name__ == "__main__":
     bad_images = data[data["mean_score"] < BAD_IMAGE_THRESHOLD]
     bad_images = bad_images.head(NUMBER_OF_BAD_IMAGES)
 
-    os.makedirs("./data/bad_images", exist_ok=True)
+    os.makedirs(BAD_IMAGE_DIR, exist_ok=True)
     # copy bad images to a new folder
     for index, row in bad_images.iterrows():
         # concat directory and image name
@@ -158,9 +166,9 @@ if __name__ == "__main__":
         scores_strings = "_".join(scores)
         mean_score = row["mean_score"]
         image_name = f"{mean_score:.2f}_[{scores_strings}]_{directory}_{image_name}"
-        image_path = os.path.join(row["directory"], "subject", row["image"])
+        image_path = os.path.join(row["directory"], SUBDIR, row["image"])
         # copy image to new folder
-        shutil.copy(image_path, os.path.join("./data/bad_images", image_name))
+        shutil.copy(image_path, os.path.join(BAD_IMAGE_DIR, image_name))
         # remove files
         # remove_files(row["directory"], row["image"])
 

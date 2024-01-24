@@ -1,5 +1,5 @@
 import os
-
+import io
 from itertools import permutations
 import pandas as pd
 import numpy as np
@@ -14,14 +14,16 @@ from transformers import (
     AutoTokenizer,
     AutoImageProcessor,
     CLIPVisionModelWithProjection,
+    CLIPProcessor,
+    CLIPModel,
 )
 
 from tqdm import tqdm
+from utils import BestEmbeddings
 
+IMAGES_PATH = "data/image/"
 
-IMAGES_PATH = "./data/image/"
-
-DATASET_PATH = "./data/pairs_dataset/"
+DATASET_PATH = "data/pairs/"
 
 data_dirs = os.listdir(IMAGES_PATH)
 # keep only directories
@@ -30,14 +32,14 @@ data_dirs = [
     for data_dir in data_dirs
     if os.path.isdir(os.path.join(IMAGES_PATH, data_dir))
 ]
-
-PROMPT = "human, ultra quality, sharp focus, 8K UHD"
+# sort directories by name
+data_dirs = sorted(data_dirs)
 
 RESOLUTION = 512
 MAX_FRAMES = 8
 BATCH_SIZE = 64
-MAX_SCORE = 0.95
-MIN_SCORE = 0.85
+MAX_SCORE = 0.90
+MIN_SCORE = 0.80
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -47,16 +49,24 @@ tokenizer = AutoTokenizer.from_pretrained(
     use_fast=False,
 )
 
-image_processor = AutoImageProcessor.from_pretrained("openai/clip-vit-base-patch32")
+image_processor = AutoImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
 model = CLIPVisionModelWithProjection.from_pretrained(
-    "openai/clip-vit-base-patch32"
+    "openai/clip-vit-large-patch14"
 ).to(DEVICE)
 
 
-def tokenize_captions(examples, is_train=True):
-    captions = [PROMPT] * len(examples["original"])
+model_prompt_finder = CLIPModel.from_pretrained("openai/clip-vit-large-patch14").to(
+    DEVICE
+)
+processor_prompt_finder = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+best_embeddings = BestEmbeddings(model_prompt_finder, processor_prompt_finder)
+
+
+def tokenize_captions(images):
+    prompts = best_embeddings(images)
+
     inputs = tokenizer(
-        captions,
+        prompts,
         max_length=tokenizer.model_max_length,
         padding="max_length",
         truncation=True,
@@ -108,7 +118,7 @@ def preprocess_train(examples):
     examples["clothes_openpose"] = clothes_openpose
     examples["mask"] = mask
     examples["target"] = target
-    examples["input_ids"] = tokenize_captions(examples)
+    examples["input_ids"] = tokenize_captions(clothes)
 
     return examples
 
@@ -154,6 +164,52 @@ def compute_scores(pd_image1: pd.Series, pd_image2: pd.Series) -> pd.Series:
     return pd.Series(scores.cpu().numpy(), index=pd_image1.index)
 
 
+def process_dataset_back_to_images(examples):
+    original = [
+        Image.open(io.BytesIO(binary_data["bytes"]))
+        for binary_data in examples["original"]
+    ]
+
+    agnostic = [
+        Image.open(io.BytesIO(binary_data["bytes"]))
+        for binary_data in examples["agnostic"]
+    ]
+
+    original_openpose = [
+        Image.open(io.BytesIO(binary_data["bytes"]))
+        for binary_data in examples["original_openpose"]
+    ]
+
+    clothes = [
+        Image.open(io.BytesIO(binary_data["bytes"]))
+        for binary_data in examples["clothes"]
+    ]
+
+    clothes_openpose = [
+        Image.open(io.BytesIO(binary_data["bytes"]))
+        for binary_data in examples["clothes_openpose"]
+    ]
+
+    mask = [
+        Image.open(io.BytesIO(binary_data["bytes"])) for binary_data in examples["mask"]
+    ]
+
+    target = [
+        Image.open(io.BytesIO(binary_data["bytes"]))
+        for binary_data in examples["target"]
+    ]
+
+    examples["original"] = original
+    examples["agnostic"] = agnostic
+    examples["original_openpose"] = original_openpose
+    examples["clothes"] = clothes
+    examples["clothes_openpose"] = clothes_openpose
+    examples["mask"] = mask
+    examples["target"] = target
+
+    return examples
+
+
 # if DATASET_PATH exists, then load the dataset from DATASET_PATH
 if not os.path.exists(DATASET_PATH):
     df_final = pd.DataFrame()
@@ -164,6 +220,10 @@ if not os.path.exists(DATASET_PATH):
             for filename in os.listdir(os.path.join(data_dir, "subject"))
             if filename.endswith(".jpg")
         ]
+
+        if len(filenames) < 2:
+            print(f"Skipping {data_dir} because it has less than 2 images")
+            continue
 
         df = pd.DataFrame(permutations(filenames, 2), columns=["original", "clothes"])
 
@@ -202,8 +262,6 @@ if not os.path.exists(DATASET_PATH):
         index_to_drop = []
         for i in range(0, len(df), BATCH_SIZE):
             batch = df.iloc[i : i + BATCH_SIZE]
-            if batch.shape[0] == 0:
-                break
             # compute similarity score for each batch
             batch_scores = compute_scores(batch["original"], batch["target"])
             # remove rows where scores are over or under a threshold
@@ -217,10 +275,6 @@ if not os.path.exists(DATASET_PATH):
             index_to_drop = index_to_drop[: df.shape[0] - MAX_FRAMES // 2]
         df = df.drop(pd.Index(index_to_drop))
 
-        # if df is empty, then skip this directory
-        if df.shape[0] == 0:
-            continue
-
         if df.shape[0] > MAX_FRAMES:
             # keep only MAX_FRAMES rows
             df = df.sample(n=MAX_FRAMES, random_state=42)
@@ -228,11 +282,13 @@ if not os.path.exists(DATASET_PATH):
         df_final = pd.concat([df_final, df], ignore_index=True)
 
     dataset = Dataset.from_pandas(df_final)
+    dataset = dataset.map(preprocess_train, batched=True, batch_size=4)
     dataset.save_to_disk(DATASET_PATH)
 else:
     dataset = datasets.load_from_disk(DATASET_PATH)
 
-dataset.set_transform(preprocess_train)
+# map back to images
+dataset.set_transform(process_dataset_back_to_images)
 
 dataset = dataset.train_test_split(test_size=4, shuffle=True, seed=42)
 

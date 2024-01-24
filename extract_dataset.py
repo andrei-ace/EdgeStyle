@@ -29,14 +29,14 @@ MAX_FRAMES = 8
 
 BATCH_SIZE = 64
 CONFIDENCE_THRESHOLD = 0.5
-SUBJECT_SCORE_THRESHOLD = 0.75
+SUBJECT_SCORE_THRESHOLD = 0.5
 IMAGE_WIDTH = 512
 IMAGE_HEIGHT = 512
 BOX_MARGIN = 0.1
 VIDEOS_PATH = "data/video"
 IMAGES_PATH = "data/image"
 
-MIN_CLOTHES_AREA = IMAGE_WIDTH * IMAGE_HEIGHT * 0.05
+# MIN_CLOTHES_AREA = IMAGE_WIDTH * IMAGE_HEIGHT * 0.05
 
 MODEL_NAME = "l2"
 MODEL_PATH = "efficientvit/assets/checkpoints/sam/l2.pt"
@@ -85,9 +85,8 @@ efficientvit_sam_predictor_clothes = EfficientViTSamPredictor(efficientvit_sam_c
 prompts = (
     "quality",
     "real",
+    "natural",
     "sharpness",
-    ("one", "two"),
-    ("", "furniture"),
 )
 
 
@@ -99,7 +98,6 @@ def get_prompt(prompt):
 
 
 score_columns = ["score_" + get_prompt(prompt) for prompt in prompts]
-clothes_score_columns = ["clothes_score_" + get_prompt(prompt) for prompt in prompts]
 
 image_quality_assessment = (
     CLIPImageQualityAssessment(prompts=prompts).to(device=DEVICE).eval()
@@ -391,7 +389,7 @@ def create_sam_images(row):
         return None, None, None, None, None
 
     # all_masks = np.logical_or(all_masks, subject_masks)
-    all_masks = subject_masks
+    all_masks = smooth_mask(subject_masks)
 
     efficientvit_sam_predictor_agnostic.set_image(original_image)
     (
@@ -415,6 +413,12 @@ def create_sam_images(row):
     )
     predicted_clothes_mask = smooth_mask(predicted_clothes_mask[0])
 
+    all_masks = np.logical_or(
+        all_masks, np.logical_or(predicted_agnostic_mask, predicted_clothes_mask)
+    )
+
+    all_masks = smooth_mask(all_masks)
+
     unknown_mask = smooth_mask(
         np.logical_and(predicted_agnostic_mask, predicted_clothes_mask)
     )
@@ -424,19 +428,7 @@ def create_sam_images(row):
     )
     agnostic_mask = smooth_mask(agnostic_mask)
 
-    all_masks = np.logical_or(all_masks, predicted_clothes_mask)
-    all_masks = np.logical_or(all_masks, predicted_agnostic_mask)
-    all_masks = smooth_mask(all_masks)
-
-    # clothes_mask = all_masks - agnostic_mask - unknown_mask
-    clothes_mask = np.logical_and(
-        all_masks, np.logical_not(np.logical_or(agnostic_mask, unknown_mask))
-    )
-
-    clothes_mask = smooth_mask(clothes_mask)
-
-    if clothes_mask.sum() < MIN_CLOTHES_AREA:
-        return None, None, None, None, None
+    clothes_mask = predicted_clothes_mask
 
     subject_image = Image.fromarray(
         draw_binary_mask(
@@ -627,7 +619,7 @@ if __name__ == "__main__":
                 # if data.shape[0] > BATCH_SIZE:
                 #     data = data.sample(n=BATCH_SIZE)
 
-                for score_column in score_columns + clothes_score_columns:
+                for score_column in score_columns:
                     data[score_column] = 0.0
 
                 # create batches of size BATCH_SIZE
@@ -644,16 +636,6 @@ if __name__ == "__main__":
                             batch_scores = image_quality_assessment(image_tensor)
 
                         for i, score_column in enumerate(score_columns):
-                            key = list(batch_scores.keys())[i]
-                            batch.loc[:, score_column] = batch_scores[key].cpu().numpy()
-
-                        image_tensor = torch.stack(
-                            [pil_to_tensor(image) for image in batch["clothes_image"]]
-                        ).to(DEVICE)
-                        with torch.inference_mode():
-                            batch_scores = image_quality_assessment(image_tensor)
-
-                        for i, score_column in enumerate(clothes_score_columns):
                             key = list(batch_scores.keys())[i]
                             batch.loc[:, score_column] = batch_scores[key].cpu().numpy()
 
@@ -674,34 +656,15 @@ if __name__ == "__main__":
                 # compute mean score
                 data["mean_score"] = data[score_columns].mean(axis=1)
 
-                # compute min and max and mean for each score to normalize
-                min_max = {}
-                for score_column in clothes_score_columns:
-                    min_max[score_column] = {
-                        "min": data[score_column].min(),
-                        "max": data[score_column].max(),
-                    }
-
-                # normalize scores
-                for score_column in clothes_score_columns:
-                    data[score_column] = (
-                        data[score_column] - min_max[score_column]["min"]
-                    ) / (min_max[score_column]["max"] - min_max[score_column]["min"])
-
-                # compute mean score
-                data["clothes_mean_score"] = data[clothes_score_columns].mean(axis=1)
-
                 # compute score
-                data["score"] = data[
-                    ["sam_scores", "mean_score", "clothes_mean_score"]
-                ].mean(axis=1)
+                data["score"] = data[["sam_scores", "mean_score"]].mean(axis=1)
 
                 data = data.sort_values(by="score", ascending=False)
 
                 # keep only MAX_FRAMES rows
                 data = data.head(MAX_FRAMES)
 
-                # print(data[["score", "mean_score", "clothes_mean_score"]])
+                # print(data[["score", "mean_score"]])
 
                 os.makedirs(image_path, exist_ok=True)
                 os.makedirs(os.path.join(image_path, "processed"), exist_ok=True)

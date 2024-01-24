@@ -438,7 +438,8 @@ def main() -> None:
     )
 
     model_checkpoint_callback = ModelCheckpoint(
-        monitor="validation_loss",
+        # monitor="validation_loss",
+        monitor="train_loss",
         mode="min",
         save_top_k=1,
         save_last=True,
@@ -446,11 +447,11 @@ def main() -> None:
 
     trainer = L.Trainer(
         devices="auto",
-        max_epochs=1,
+        max_epochs=10,
         overfit_batches=0,
         fast_dev_run=False,
         callbacks=[model_checkpoint_callback],
-        default_root_dir="./sam_models/sam_body",
+        default_root_dir="./models/sam_body",
     )
     trainer.fit(model, train_loader, val_loader)
 
