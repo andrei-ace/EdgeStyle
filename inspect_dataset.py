@@ -5,14 +5,18 @@ import torch
 from tqdm import tqdm
 import math
 
-from utils import PairedTransform, InverseEmbeddings
+from utils import PairedTransform, InverseEmbeddings, PatchedTransform
 
 from transformers import AutoTokenizer
 
 DATASET_PATH = "./temp/inspect_dataset"
 
-BATCH_SIZE = 32
+BATCH_SIZE = 16
 RESOLUTION = 512
+RESOLUTION_PATCH = 32
+
+BG_COLOR = (127, 127, 127)
+BG_COLOR_CONTROLNET = (0, 0, 0)
 
 
 def image_grid(imgs, rows, cols):
@@ -42,15 +46,16 @@ def collate_fn(examples):
     target_transformed = []
     clothes_transformed = []
     clothes_openpose_transformed = []
-    transform = PairedTransform(
-        RESOLUTION, ((127, 127, 127), (127, 127, 127), (0, 0, 0))
-    )
+    transform = PairedTransform(RESOLUTION, (BG_COLOR, BG_COLOR, BG_COLOR_CONTROLNET))
+    patched_transform = PatchedTransform(RESOLUTION_PATCH, 0.5, BG_COLOR)
+
     for target_image, clothes_image, clothes_openpose_image in zip(
         target, clothes, clothes_openpose
     ):
         target_image, clothes_image, clothes_openpose_image = transform(
             [target_image, clothes_image, clothes_openpose_image]
         )
+        target_image = patched_transform(target_image)
         target_transformed.append(target_image)
         clothes_transformed.append(clothes_image)
         clothes_openpose_transformed.append(clothes_openpose_image)

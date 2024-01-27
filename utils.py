@@ -1,9 +1,68 @@
 from typing import Any
+
 import torchvision.transforms.functional as TF
+from torchvision import transforms
+from torchvision.transforms import InterpolationMode
+
 import random
 from PIL import Image
 import torch
 from transformers import CLIPProcessor, CLIPModel
+import numpy as np
+
+
+RESOLUTION = 512
+RESOLUTION_PATCH = 32
+
+BG_COLOR = (127, 127, 127)
+BG_COLOR_CONTROLNET = (0, 0, 0)
+
+IMAGES_TRANSFORMS = transforms.Compose(
+    [
+        transforms.Resize(RESOLUTION, interpolation=InterpolationMode.BILINEAR),
+        transforms.CenterCrop(RESOLUTION),
+        transforms.ToTensor(),
+        transforms.Normalize([0.5], [0.5]),
+    ]
+)
+
+CONDITIONING_IMAGES_TRANSFORMS = transforms.Compose(
+    [
+        transforms.Resize(RESOLUTION, interpolation=InterpolationMode.BILINEAR),
+        transforms.CenterCrop(RESOLUTION),
+        transforms.ToTensor(),
+    ]
+)
+
+
+class PatchedTransform:
+    def __init__(self, patch_size, color_percentage, color=(127, 127, 127)):
+        self.patch_size = patch_size
+        self.color_percentage = color_percentage
+        self.color = torch.tensor(color, dtype=torch.float32) / 255.0
+
+    def __call__(self, img):
+        # Convert image to tensor
+        img_tensor = TF.to_tensor(img)
+
+        # Calculate number of patches
+        patches_horizontal = img_tensor.size(2) // self.patch_size
+        patches_vertical = img_tensor.size(1) // self.patch_size
+
+        # Flatten the 2D grid of patches and decide which patches to color
+        total_patches = patches_vertical * patches_horizontal
+        num_to_color = int(total_patches * self.color_percentage)
+        indices_to_color = np.random.choice(total_patches, num_to_color, replace=False)
+
+        # Color the selected patches
+        for idx in indices_to_color:
+            row = (idx // patches_horizontal) * self.patch_size
+            col = (idx % patches_horizontal) * self.patch_size
+            img_tensor[
+                :, row : row + self.patch_size, col : col + self.patch_size
+            ] = self.color.view(3, 1, 1)
+
+        return TF.to_pil_image(img_tensor)
 
 
 class PairedTransform:
@@ -255,6 +314,81 @@ class TextEmbeddings:
             return_tensors="pt",
         )
         return inputs.input_ids
+
+
+class CollateFn:
+    def __init__(self, proportion_patchworks=0.0):
+        self.proportion_patchworks = proportion_patchworks
+
+    def __call__(self, examples):
+        # Initialize the transforms
+        paired_transform = PairedTransform(
+            RESOLUTION, (BG_COLOR, BG_COLOR, BG_COLOR_CONTROLNET)
+        )
+        patched_transform = PatchedTransform(
+            RESOLUTION_PATCH, self.proportion_patchworks, BG_COLOR
+        )
+
+        # Apply the paired transform and collect the data
+        paired_data = [
+            paired_transform([ex["target"], ex["clothes"], ex["clothes_openpose"]])
+            for ex in examples
+        ]
+        target_transformed, clothes_transformed, clothes_openpose_transformed = zip(
+            *paired_data
+        )
+
+        # Apply patched transform to various image types
+        patched_original = [patched_transform(ex["original"]) for ex in examples]
+        patched_agnostic = [patched_transform(ex["agnostic"]) for ex in examples]
+        patched_clothes = [patched_transform(t) for t in clothes_transformed]
+
+        # Reassemble the examples with the transformed images
+        transformed_examples = [
+            {
+                "original": po,
+                "agnostic": pa,
+                "mask": ex["mask"],
+                "original_openpose": ex["original_openpose"],
+                "target": tt,
+                "clothes": pc,
+                "clothes_openpose": co,
+                "input_ids": ex["input_ids"],
+            }
+            for po, pa, tt, pc, co, ex in zip(
+                patched_original,
+                patched_agnostic,
+                target_transformed,
+                patched_clothes,
+                clothes_openpose_transformed,
+                examples,
+            )
+        ]
+
+        # Create tensors for each image type and apply the appropriate transforms
+        tensor_fields = {
+            "original": IMAGES_TRANSFORMS,
+            "agnostic": IMAGES_TRANSFORMS,
+            "original_openpose": CONDITIONING_IMAGES_TRANSFORMS,
+            "clothes": IMAGES_TRANSFORMS,
+            "clothes_openpose": CONDITIONING_IMAGES_TRANSFORMS,
+            "target": IMAGES_TRANSFORMS,
+        }
+        tensors = {
+            field: self._stack_and_format(
+                [ex[field] for ex in transformed_examples], transform
+            )
+            for field, transform in tensor_fields.items()
+        }
+        tensors["input_ids"] = torch.stack(
+            [torch.from_numpy(np.array(ex["input_ids"])) for ex in examples]
+        )
+
+        return tensors
+
+    def _stack_and_format(self, images, transform):
+        stacked_images = torch.stack([transform(img) for img in images])
+        return stacked_images.to(memory_format=torch.contiguous_format).float()
 
 
 if __name__ == "__main__":

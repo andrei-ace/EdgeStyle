@@ -4,7 +4,7 @@ from torchvision import transforms
 
 from diffusers import (
     AutoencoderKL,
-    StableDiffusionControlNetPipeline,
+    StableDiffusionControlNetImg2ImgPipeline,
     UNet2DConditionModel,
     UniPCMultistepScheduler,
 )
@@ -103,7 +103,7 @@ if __name__ == "__main__":
             net.set_autoencoder(vae)
         net.tie_weights(unet)
 
-    pipeline = StableDiffusionControlNetPipeline.from_pretrained(
+    pipeline = StableDiffusionControlNetImg2ImgPipeline.from_pretrained(
         MODEL_NAME,
         vae=vae,
         text_encoder=text_encoder,
@@ -135,10 +135,13 @@ if __name__ == "__main__":
             # prompt=prompts[0],
             prompt=prompts[0] + "detailed, ultra quality, sharp focus, 8K UHD",
             # prompt="clear face, full body, ultra quality, sharp focus, 8K UHD",
-            # prompt="edgestyle",
+            # prompt="",
             guidance_scale=4.5,
             # guess_mode=True,
             image=[
+                IMAGES_TRANSFORMS(agnostic).unsqueeze(0),
+            ],
+            control_image=[
                 IMAGES_TRANSFORMS(agnostic).unsqueeze(0),
                 CONDITIONING_IMAGES_TRANSFORMS(original_openpose).unsqueeze(0),
                 IMAGES_TRANSFORMS(clothes).unsqueeze(0),
@@ -147,9 +150,10 @@ if __name__ == "__main__":
             # controlnet_conditioning_scale=[1, 1, 1, 1],
             # control_guidance_start=0.0,
             # control_guidance_end=0.9,
+            strength=0.99,
             negative_prompt=NEGATIVE_PROMPT,
             num_inference_steps=50,
             generator=generator,
         ).images[0]
 
-    image.save("temp/test_data/result_text2image.jpg")
+    image.save("temp/test_data/result_image2image_4nets.jpg")

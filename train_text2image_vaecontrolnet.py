@@ -54,7 +54,7 @@ from controllora import ControlLoRAModel
 from diffusers.training_utils import compute_snr
 
 from dataset import edgestyle_dataset, edgestyle_dataset_test
-from utils import PairedTransform
+from utils import CollateFn, CONDITIONING_IMAGES_TRANSFORMS
 from PIL import Image
 
 
@@ -66,29 +66,6 @@ check_min_version("0.24.0")
 logger = get_logger(__name__)
 
 NEGATIVE_PROMPT = "disfigured, ugly, bad, immature, cartoon, anime, 3d, painting, b&w"
-
-RESOLUTION = 512
-
-IMAGES_TRANSFORMS = transforms.Compose(
-    [
-        transforms.Resize(
-            RESOLUTION, interpolation=transforms.InterpolationMode.BILINEAR
-        ),
-        transforms.CenterCrop(RESOLUTION),
-        transforms.ToTensor(),
-        transforms.Normalize([0.5], [0.5]),
-    ]
-)
-
-CONDITIONING_IMAGES_TRANSFORMS = transforms.Compose(
-    [
-        transforms.Resize(
-            RESOLUTION, interpolation=transforms.InterpolationMode.BILINEAR
-        ),
-        transforms.CenterCrop(RESOLUTION),
-        transforms.ToTensor(),
-    ]
-)
 
 
 def image_grid(imgs, rows, cols):
@@ -167,7 +144,7 @@ def log_validation(
             with torch.autocast("cuda"):
                 image = pipeline(
                     prompt=prompt,
-                    guidance_scale=12.0,
+                    guidance_scale=1.5,
                     image=[
                         agnostic.unsqueeze(0),
                         original_openpose.unsqueeze(0),
@@ -543,6 +520,12 @@ def parse_args(input_args=None):
         help="Proportion of image prompts to be replaced with empty strings. Defaults to 0 (no prompt replacement).",
     )
     parser.add_argument(
+        "--proportion_patchworks",
+        type=float,
+        default=0,
+        help="Proportion of patchworks to color as background. Defaults to 0 (no patchworks will be colored).",
+    )
+    parser.add_argument(
         "--validation_prompt",
         type=str,
         default=None,
@@ -587,95 +570,14 @@ def parse_args(input_args=None):
     if args.proportion_empty_prompts < 0 or args.proportion_empty_prompts > 1:
         raise ValueError("`--proportion_empty_prompts` must be in the range [0, 1].")
 
+    if args.proportion_patchworks < 0 or args.proportion_patchworks > 1:
+        raise ValueError("`--proportion_patchworks` must be in the range [0, 1].")
+
     if args.resolution % 8 != 0:
         raise ValueError(
             "`--resolution` must be divisible by 8 for consistently sized encoded images between the VAE and the controlnet encoder."
         )
     return args
-
-
-def collate_fn(examples):
-    target = [example["target"] for example in examples]
-    clothes = [example["clothes"] for example in examples]
-    clothes_openpose = [example["clothes_openpose"] for example in examples]
-
-    target_transformed = []
-    clothes_transformed = []
-    clothes_openpose_transformed = []
-    transform = PairedTransform(
-        RESOLUTION, ((127, 127, 127), (127, 127, 127), (0, 0, 0))
-    )
-    for target_image, clothes_image, clothes_openpose_image in zip(
-        target, clothes, clothes_openpose
-    ):
-        target_image, clothes_image, clothes_openpose_image = transform(
-            [target_image, clothes_image, clothes_openpose_image]
-        )
-        target_transformed.append(target_image)
-        clothes_transformed.append(clothes_image)
-        clothes_openpose_transformed.append(clothes_openpose_image)
-
-    examples = [
-        {
-            "original": example["original"],
-            "agnostic": example["agnostic"],
-            "mask": example["mask"],
-            "original_openpose": example["original_openpose"],
-            "target": target_transformed[i],
-            "clothes": clothes_transformed[i],
-            "clothes_openpose": clothes_openpose_transformed[i],
-            "input_ids": example["input_ids"],
-        }
-        for i, example in enumerate(examples)
-    ]
-
-    original = torch.stack(
-        [IMAGES_TRANSFORMS(example["original"]) for example in examples]
-    )
-    original = original.to(memory_format=torch.contiguous_format).float()
-
-    agnostic = torch.stack(
-        [IMAGES_TRANSFORMS(example["agnostic"]) for example in examples]
-    )
-    agnostic = agnostic.to(memory_format=torch.contiguous_format).float()
-
-    original_openpose = torch.stack(
-        [
-            CONDITIONING_IMAGES_TRANSFORMS(example["original_openpose"])
-            for example in examples
-        ]
-    )
-    original_openpose = original_openpose.to(
-        memory_format=torch.contiguous_format
-    ).float()
-
-    clothes = torch.stack(
-        [IMAGES_TRANSFORMS(example["clothes"]) for example in examples]
-    )
-    clothes = clothes.to(memory_format=torch.contiguous_format).float()
-
-    clothes_openpose = torch.stack(
-        [
-            CONDITIONING_IMAGES_TRANSFORMS(example["clothes_openpose"])
-            for example in examples
-        ]
-    )
-    clothes_openpose = clothes_openpose.to(
-        memory_format=torch.contiguous_format
-    ).float()
-
-    input_ids = torch.stack(
-        [torch.from_numpy(np.array(example["input_ids"])) for example in examples]
-    )
-
-    return {
-        "original": original,
-        "agnostic": agnostic,
-        "original_openpose": original_openpose,
-        "clothes": clothes,
-        "clothes_openpose": clothes_openpose,
-        "input_ids": input_ids,
-    }
 
 
 def main(args):
@@ -913,17 +815,21 @@ def main(args):
             safeguard_warmup=args.prodigy_safeguard_warmup,
         )
 
+    train_collate_fn = CollateFn(proportion_patchworks=args.proportion_patchworks)
+
     train_dataloader = torch.utils.data.DataLoader(
         edgestyle_dataset,
         shuffle=True,
-        collate_fn=collate_fn,
+        collate_fn=train_collate_fn,
         batch_size=args.train_batch_size,
         num_workers=args.dataloader_num_workers,
     )
 
+    test_collate_fn = CollateFn(proportion_patchworks=0.0)
+
     test_dataloader = torch.utils.data.DataLoader(
         edgestyle_dataset_test,
-        collate_fn=collate_fn,
+        collate_fn=test_collate_fn,
         batch_size=len(edgestyle_dataset_test),
         num_workers=args.dataloader_num_workers,
     )
@@ -1050,6 +956,18 @@ def main(args):
         disable=not accelerator.is_local_main_process,
     )
 
+    empty_prompt = (
+        tokenizer(
+            "",
+            max_length=tokenizer.model_max_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
+        )
+        .input_ids.squeeze()
+        .to(accelerator.device)
+    )
+
     validation_batch = next(iter(test_dataloader))
     image_logs = None
     conditioning_scale = [1.0] * len(controlnet.nets)
@@ -1079,7 +997,10 @@ def main(args):
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                # Get the text embedding for conditioning
+                for i in range(batch["input_ids"].shape[0]):
+                    if random.random() < args.proportion_empty_prompts:
+                        batch["input_ids"][i] = empty_prompt
+
                 encoder_hidden_states = text_encoder(batch["input_ids"])[0]
 
                 agnostic = batch["agnostic"].to(dtype=weight_dtype)

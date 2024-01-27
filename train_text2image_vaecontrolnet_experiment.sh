@@ -17,9 +17,13 @@ accelerate launch train_text2image_vaecontrolnet.py \
  --adam_beta2=0.99 \
  --adam_weight_decay=0.01 \
  --snr_gamma=5.0 \
- --validation_steps 10 \
+ --proportion_empty_prompts=0.5 \
+ --proportion_patchworks=0.5 \
+ --validation_steps 2500 \
  --checkpointing_steps 5000 \
- --max_train_steps=10
+ --max_train_steps=10000
 
 
  #--lr_scheduler "cosine_annealing" \
+ #--proportion_empty_prompts=0.5 \
+ #--proportion_patchworks=0.5 \
