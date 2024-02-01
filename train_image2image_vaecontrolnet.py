@@ -53,7 +53,7 @@ from controllora import ControlLoRAModel
 
 from diffusers.training_utils import compute_snr
 
-from dataset import edgestyle_dataset, edgestyle_dataset_test
+from dataset_local import edgestyle_dataset, edgestyle_dataset_test
 from utils import PairedTransform
 from PIL import Image
 

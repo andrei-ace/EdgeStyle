@@ -12,7 +12,7 @@ import numpy as np
 
 
 RESOLUTION = 512
-RESOLUTION_PATCH = 32
+RESOLUTION_PATCH = 16
 
 BG_COLOR = (127, 127, 127)
 BG_COLOR_CONTROLNET = (0, 0, 0)
@@ -317,8 +317,9 @@ class TextEmbeddings:
 
 
 class CollateFn:
-    def __init__(self, proportion_patchworks=0.0):
+    def __init__(self, proportion_patchworks=0.0, proportion_patchworks_images=0.0):
         self.proportion_patchworks = proportion_patchworks
+        self.proportion_patchworks_images = proportion_patchworks_images
 
     def __call__(self, examples):
         # Initialize the transforms
@@ -339,9 +340,25 @@ class CollateFn:
         )
 
         # Apply patched transform to various image types
-        patched_original = [patched_transform(ex["original"]) for ex in examples]
-        patched_agnostic = [patched_transform(ex["agnostic"]) for ex in examples]
-        patched_clothes = [patched_transform(t) for t in clothes_transformed]
+        patched_original = [
+            patched_transform(ex["original"])
+            if random.random() < self.proportion_patchworks_images
+            else ex["original"]
+            for ex in examples
+        ]
+        # patched_original = [ex["original"] for ex in examples]
+        patched_agnostic = [
+            patched_transform(ex["agnostic"])
+            if random.random() < self.proportion_patchworks_images
+            else ex["agnostic"]
+            for ex in examples
+        ]
+        patched_clothes = [
+            patched_transform(image)
+            if random.random() < self.proportion_patchworks_images
+            else image
+            for image in clothes_transformed
+        ]
 
         # Reassemble the examples with the transformed images
         transformed_examples = [

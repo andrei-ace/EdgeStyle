@@ -54,7 +54,7 @@ from controllora import ControlLoRAModel
 from diffusers.training_utils import compute_snr
 
 from dataset import edgestyle_dataset, edgestyle_dataset_test
-from utils import CollateFn, CONDITIONING_IMAGES_TRANSFORMS
+from utils import CollateFn, CONDITIONING_IMAGES_TRANSFORMS, IMAGES_TRANSFORMS, BG_COLOR
 from PIL import Image
 
 
@@ -65,18 +65,15 @@ check_min_version("0.24.0")
 
 logger = get_logger(__name__)
 
-NEGATIVE_PROMPT = "disfigured, ugly, bad, immature, cartoon, anime, 3d, painting, b&w"
+NEGATIVE_PROMPT = (
+    "(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime),"
+    + "text, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, "
+    + "mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, "
+    + "cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers,"
+    + " too many fingers, long neck,"
+)
 
-
-def image_grid(imgs, rows, cols):
-    assert len(imgs) == rows * cols
-
-    w, h = imgs[0].size
-    grid = Image.new("RGB", size=(cols * w, rows * h))
-
-    for i, img in enumerate(imgs):
-        grid.paste(img, box=(i % cols * w, i // cols * h))
-    return grid
+PROMT_TO_ADD = ", RAW photo, subject, 8k uhd, dslr, soft lighting, high quality, film grain, Fujifilm XT3"
 
 
 def log_validation(
@@ -139,20 +136,23 @@ def log_validation(
     ):
         images = []
         image_name = f"validation_image_{i}"
+        # Generate increasing args.num_validation_images for each validation image
+        guidance_scales = np.linspace(3.5, 7.0, args.num_validation_images)
 
         for _ in range(args.num_validation_images):
             with torch.autocast("cuda"):
                 image = pipeline(
-                    prompt=prompt,
-                    guidance_scale=1.5,
+                    prompt=prompt + PROMT_TO_ADD,
+                    guidance_scale=guidance_scales[_],
                     image=[
                         agnostic.unsqueeze(0),
                         original_openpose.unsqueeze(0),
                         clothes.unsqueeze(0),
                         clothes_openpose.unsqueeze(0),
                     ],
+                    # guess_mode=True,
                     negative_prompt=NEGATIVE_PROMPT,
-                    num_inference_steps=20,
+                    num_inference_steps=50,
                     generator=generator,
                 ).images[0]
 
@@ -225,6 +225,13 @@ def parse_args(input_args=None):
         default=None,
         required=True,
         help="Path to pretrained model or model identifier from huggingface.co/models.",
+    )
+    parser.add_argument(
+        "--pretrained_vae_name_or_path",
+        type=str,
+        default=None,
+        required=True,
+        help="Path to pretrained VAE model or model identifier from huggingface.co/models.",
     )
     parser.add_argument(
         "--controlnet_model_name_or_path",
@@ -520,21 +527,22 @@ def parse_args(input_args=None):
         help="Proportion of image prompts to be replaced with empty strings. Defaults to 0 (no prompt replacement).",
     )
     parser.add_argument(
+        "--proportion_empty_images",
+        type=float,
+        default=0,
+        help="Proportion of empty agnostic/clothes images. Defaults to 0 (no empty image replacement).",
+    )
+    parser.add_argument(
         "--proportion_patchworks",
         type=float,
         default=0,
         help="Proportion of patchworks to color as background. Defaults to 0 (no patchworks will be colored).",
     )
     parser.add_argument(
-        "--validation_prompt",
-        type=str,
-        default=None,
-        nargs="+",
-        help=(
-            "A set of prompts evaluated every `--validation_steps` and logged to `--report_to`."
-            " Provide either a matching number of `--validation_image`s, a single `--validation_image`"
-            " to be used with all prompts, or a single prompt that will be used with all `--validation_image`s."
-        ),
+        "--proportion_patchworks_images",
+        type=float,
+        default=0,
+        help="Proportion of images to apply patchworks. Defaults to 0 (no image will be patched).",
     )
     parser.add_argument(
         "--num_validation_images",
@@ -569,9 +577,14 @@ def parse_args(input_args=None):
 
     if args.proportion_empty_prompts < 0 or args.proportion_empty_prompts > 1:
         raise ValueError("`--proportion_empty_prompts` must be in the range [0, 1].")
-
+    if args.proportion_empty_images < 0 or args.proportion_empty_images > 1:
+        raise ValueError("`--proportion_empty_images` must be in the range [0, 1].")
     if args.proportion_patchworks < 0 or args.proportion_patchworks > 1:
         raise ValueError("`--proportion_patchworks` must be in the range [0, 1].")
+    if args.proportion_patchworks_images < 0 or args.proportion_patchworks_images > 1:
+        raise ValueError(
+            "`--proportion_patchworks_images` must be in the range [0, 1]."
+        )
 
     if args.resolution % 8 != 0:
         raise ValueError(
@@ -640,12 +653,15 @@ def main(args):
         revision=args.revision,
         variant=args.variant,
     )
-    vae = AutoencoderKL.from_pretrained(
-        args.pretrained_model_name_or_path,
-        subfolder="vae",
-        revision=args.revision,
-        variant=args.variant,
-    )
+    if args.pretrained_vae_name_or_path:
+        vae = AutoencoderKL.from_pretrained(args.pretrained_vae_name_or_path)
+    else:
+        vae = AutoencoderKL.from_pretrained(
+            args.pretrained_model_name_or_path,
+            subfolder="vae",
+            revision=args.revision,
+            variant=args.variant,
+        )
     unet = UNet2DConditionModel.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="unet",
@@ -657,7 +673,32 @@ def main(args):
     text_encoder.requires_grad_(False)
 
     if args.controlnet_model_name_or_path:
-        raise NotImplementedError("from pretrained not implemented yet")
+        controlnet = MultiControlNetModel(
+            [
+                ControlLoRAModel.from_pretrained(
+                    args.controlnet_model_name_or_path,
+                    subfolder="controlnet-0",
+                    vae=vae,
+                ),
+                ControlLoRAModel.from_pretrained(
+                    args.controlnet_model_name_or_path,
+                    subfolder="controlnet-1",
+                ),
+                ControlLoRAModel.from_pretrained(
+                    args.controlnet_model_name_or_path,
+                    subfolder="controlnet-2",
+                    vae=vae,
+                ),
+                ControlLoRAModel.from_pretrained(
+                    args.controlnet_model_name_or_path,
+                    subfolder="controlnet-3",
+                ),
+            ]
+        )
+        for net in controlnet.nets:
+            if net.uses_vae:
+                net.set_autoencoder(vae)
+            net.tie_weights(unet)
     else:
         logger.info("Initializing controlnet weights from unet")
         controlnet = MultiControlNetModel(
@@ -686,6 +727,7 @@ def main(args):
                 ),
             ]
         )
+    controlnet.train()
 
     # `accelerate` 0.16.0 will have better support for customized saving
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
@@ -728,11 +770,6 @@ def main(args):
 
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
-
-    controlnet.train()
-
-    # The VAE is always in float32 to avoid NaN losses.
-    vae.to(accelerator.device, dtype=torch.float32)
 
     # Check that all trainable models are in full precision
     low_precision_error_string = (
@@ -815,7 +852,10 @@ def main(args):
             safeguard_warmup=args.prodigy_safeguard_warmup,
         )
 
-    train_collate_fn = CollateFn(proportion_patchworks=args.proportion_patchworks)
+    train_collate_fn = CollateFn(
+        proportion_patchworks=args.proportion_patchworks,
+        proportion_patchworks_images=args.proportion_patchworks_images,
+    )
 
     train_dataloader = torch.utils.data.DataLoader(
         edgestyle_dataset,
@@ -825,7 +865,9 @@ def main(args):
         num_workers=args.dataloader_num_workers,
     )
 
-    test_collate_fn = CollateFn(proportion_patchworks=0.0)
+    test_collate_fn = CollateFn(
+        proportion_patchworks=0.0, proportion_patchworks_images=0.0
+    )
 
     test_dataloader = torch.utils.data.DataLoader(
         edgestyle_dataset_test,
@@ -877,7 +919,7 @@ def main(args):
         weight_dtype = torch.bfloat16
 
     # Move vae, unet and text_encoder to device and cast to weight_dtype
-    vae.to(accelerator.device, dtype=weight_dtype)
+    vae.to(accelerator.device, dtype=torch.float32)  # vae should always be in fp32
     unet.to(accelerator.device, dtype=weight_dtype)
     text_encoder.to(accelerator.device, dtype=weight_dtype)
 
@@ -968,112 +1010,119 @@ def main(args):
         .to(accelerator.device)
     )
 
+    # empty image is a BG_COLOR image
+    empty_image = (
+        IMAGES_TRANSFORMS(
+            Image.new("RGB", (args.resolution, args.resolution), color=BG_COLOR)
+        )
+        .squeeze()
+        .to(accelerator.device)
+    )
+
     validation_batch = next(iter(test_dataloader))
-    image_logs = None
-    conditioning_scale = [1.0] * len(controlnet.nets)
     for epoch in range(first_epoch, args.num_train_epochs):
         train_loss = 0.0
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(controlnet):
-                # Convert images to latent space
-                latents = vae.encode(
-                    batch["original"].to(dtype=weight_dtype)
-                ).latent_dist.sample()
-                latents = latents * vae.config.scaling_factor
+                with torch.autocast("cuda"):
+                    # Convert images to latent space
+                    latents = vae.encode(batch["original"]).latent_dist.sample()
+                    latents = latents * vae.config.scaling_factor
 
-                # Sample noise that we'll add to the latents
-                noise = torch.randn_like(latents)
-                bsz = latents.shape[0]
-                # Sample a random timestep for each image
-                timesteps = torch.randint(
-                    0,
-                    noise_scheduler.config.num_train_timesteps,
-                    (bsz,),
-                    device=latents.device,
-                )
-                timesteps = timesteps.long()
+                    # Sample noise that we'll add to the latents
+                    noise = torch.randn_like(latents)
+                    bsz = latents.shape[0]
+                    # Sample a random timestep for each image
+                    timesteps = torch.randint(
+                        0,
+                        noise_scheduler.config.num_train_timesteps,
+                        (bsz,),
+                        device=latents.device,
+                    )
+                    timesteps = timesteps.long()
 
-                # Add noise to the latents according to the noise magnitude at each timestep
-                # (this is the forward diffusion process)
-                noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
+                    # Add noise to the latents according to the noise magnitude at each timestep
+                    # (this is the forward diffusion process)
+                    noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                for i in range(batch["input_ids"].shape[0]):
-                    if random.random() < args.proportion_empty_prompts:
-                        batch["input_ids"][i] = empty_prompt
+                    for i in range(batch["input_ids"].shape[0]):
+                        if random.random() < args.proportion_empty_prompts:
+                            batch["input_ids"][i] = empty_prompt
+                        if random.random() < args.proportion_empty_images:
+                            if random.random() < 0.5:
+                                batch["agnostic"][i] = empty_image
+                            else:
+                                batch["clothes"][i] = empty_image
 
-                encoder_hidden_states = text_encoder(batch["input_ids"])[0]
+                    encoder_hidden_states = text_encoder(batch["input_ids"])[0]
 
-                agnostic = batch["agnostic"].to(dtype=weight_dtype)
-                original_openpose = batch["original_openpose"].to(dtype=weight_dtype)
-                clothes = batch["clothes"].to(dtype=weight_dtype)
-                clothes_openpose = batch["clothes_openpose"].to(dtype=weight_dtype)
+                    agnostic = batch["agnostic"]
+                    original_openpose = batch["original_openpose"]
+                    clothes = batch["clothes"]
+                    clothes_openpose = batch["clothes_openpose"]
 
-                down_block_res_samples, mid_block_res_sample = controlnet(
-                    noisy_latents,
-                    timesteps,
-                    encoder_hidden_states=encoder_hidden_states,
-                    controlnet_cond=[
-                        agnostic,
-                        original_openpose,
-                        clothes,
-                        clothes_openpose,
-                    ],
-                    conditioning_scale=conditioning_scale,
-                    return_dict=False,
-                )
-
-                # Predict the noise residual
-                model_pred = unet(
-                    noisy_latents,
-                    timesteps,
-                    encoder_hidden_states=encoder_hidden_states,
-                    down_block_additional_residuals=[
-                        sample.to(dtype=weight_dtype)
-                        for sample in down_block_res_samples
-                    ],
-                    mid_block_additional_residual=mid_block_res_sample.to(
-                        dtype=weight_dtype
-                    ),
-                ).sample
-
-                # Get the target for loss depending on the prediction type
-                if noise_scheduler.config.prediction_type == "epsilon":
-                    target = noise
-                elif noise_scheduler.config.prediction_type == "v_prediction":
-                    target = noise_scheduler.get_velocity(latents, noise, timesteps)
-                else:
-                    raise ValueError(
-                        f"Unknown prediction type {noise_scheduler.config.prediction_type}"
+                    down_block_res_samples, mid_block_res_sample = controlnet(
+                        noisy_latents,
+                        timesteps,
+                        encoder_hidden_states=encoder_hidden_states,
+                        controlnet_cond=[
+                            agnostic,
+                            original_openpose,
+                            clothes,
+                            clothes_openpose,
+                        ],
+                        conditioning_scale=[1.0] * len(controlnet.nets),
+                        return_dict=False,
                     )
 
-                # print(model_pred)
-                if args.snr_gamma is None:
-                    loss = F.mse_loss(
-                        model_pred.float(), target.float(), reduction="mean"
-                    )
-                else:
-                    # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
-                    # Since we predict the noise instead of x_0, the original formulation is slightly changed.
-                    # This is discussed in Section 4.2 of the same paper.
-                    snr = compute_snr(noise_scheduler, timesteps)
-                    if noise_scheduler.config.prediction_type == "v_prediction":
-                        # Velocity objective requires that we add one to SNR values before we divide by them.
-                        snr = snr + 1
-                    mse_loss_weights = (
-                        torch.stack(
-                            [snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1
-                        ).min(dim=1)[0]
-                        / snr
-                    )
+                    # Predict the noise residual
+                    model_pred = unet(
+                        noisy_latents,
+                        timesteps,
+                        encoder_hidden_states=encoder_hidden_states,
+                        down_block_additional_residuals=down_block_res_samples,
+                        mid_block_additional_residual=mid_block_res_sample,
+                    ).sample
 
-                    loss = F.mse_loss(
-                        model_pred.float(), target.float(), reduction="none"
-                    )
-                    loss = (
-                        loss.mean(dim=list(range(1, len(loss.shape))))
-                        * mse_loss_weights
-                    )
-                    loss = loss.mean()
+                    # Get the target for loss depending on the prediction type
+                    if noise_scheduler.config.prediction_type == "epsilon":
+                        target = noise
+                    elif noise_scheduler.config.prediction_type == "v_prediction":
+                        target = noise_scheduler.get_velocity(latents, noise, timesteps)
+                    else:
+                        raise ValueError(
+                            f"Unknown prediction type {noise_scheduler.config.prediction_type}"
+                        )
+
+                    # print(model_pred)
+                    if args.snr_gamma is None:
+                        loss = F.mse_loss(
+                            model_pred.float(), target.float(), reduction="mean"
+                        )
+                    else:
+                        # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
+                        # Since we predict the noise instead of x_0, the original formulation is slightly changed.
+                        # This is discussed in Section 4.2 of the same paper.
+                        snr = compute_snr(noise_scheduler, timesteps)
+                        if noise_scheduler.config.prediction_type == "v_prediction":
+                            # Velocity objective requires that we add one to SNR values before we divide by them.
+                            snr = snr + 1
+                        mse_loss_weights = (
+                            torch.stack(
+                                [snr, args.snr_gamma * torch.ones_like(timesteps)],
+                                dim=1,
+                            ).min(dim=1)[0]
+                            / snr
+                        )
+
+                        loss = F.mse_loss(
+                            model_pred.float(), target.float(), reduction="none"
+                        )
+                        loss = (
+                            loss.mean(dim=list(range(1, len(loss.shape))))
+                            * mse_loss_weights
+                        )
+                        loss = loss.mean()
 
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
@@ -1084,31 +1133,6 @@ def main(args):
                 if accelerator.sync_gradients:
                     params_to_clip = controlnet.parameters()
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
-                    # create random scale for each controlnet
-                    for i in range(len(controlnet.nets)):
-                        conditioning_scale[i] = random.uniform(0.8, 1.2)
-                    # log gradients
-                    # set norm to 0 for each net in controlnet
-                    for i, net in enumerate(controlnet.nets):
-                        net_norm_weight = 0.0
-                        for name, param in net.named_parameters():
-                            # if name contains text controlnet_down_blocks
-                            if "controlnet_down_blocks" in name and "weight" in name:
-                                if param.grad is not None:
-                                    net_norm_weight += param.grad.data.norm(2).item()
-                            # if name contains text controlnet_mid_block
-                            elif "controlnet_mid_block" in name and "weight" in name:
-                                if param.grad is not None:
-                                    net_norm_weight += param.grad.data.norm(2).item()
-                            elif (
-                                "controlnet_cond_embedding" in name and "weight" in name
-                            ):
-                                if param.grad is not None:
-                                    net_norm_weight += param.grad.data.norm(2).item()
-                        accelerator.log(
-                            {f"1x1conv_gradient_norm_weight_{i}": net_norm_weight},
-                            step=global_step,
-                        )
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=args.set_grads_to_none)

@@ -8,3 +8,6 @@ data/
 models/
 human_parsing_dataset_resized/
 temp/
+train_*.sh
+test_*.sh
+inference_*.sh

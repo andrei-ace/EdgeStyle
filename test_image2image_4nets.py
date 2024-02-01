@@ -132,11 +132,11 @@ if __name__ == "__main__":
 
     with torch.autocast("cuda"):
         image = pipeline(
-            # prompt=prompts[0],
-            prompt=prompts[0] + "detailed, ultra quality, sharp focus, 8K UHD",
+            prompt=prompts[0],
+            # prompt=prompts[0] + "detailed, ultra quality, sharp focus, 8K UHD",
             # prompt="clear face, full body, ultra quality, sharp focus, 8K UHD",
             # prompt="",
-            guidance_scale=4.5,
+            guidance_scale=7.5,
             # guess_mode=True,
             image=[
                 IMAGES_TRANSFORMS(agnostic).unsqueeze(0),
@@ -149,7 +149,7 @@ if __name__ == "__main__":
             ],
             # controlnet_conditioning_scale=[1, 1, 1, 1],
             # control_guidance_start=0.0,
-            # control_guidance_end=0.9,
+            control_guidance_end=0.9,
             strength=0.99,
             negative_prompt=NEGATIVE_PROMPT,
             num_inference_steps=50,

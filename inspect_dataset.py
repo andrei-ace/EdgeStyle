@@ -1,6 +1,6 @@
 import os
 from PIL import Image
-from dataset import edgestyle_dataset, edgestyle_dataset_test
+from dataset_local import edgestyle_dataset, edgestyle_dataset_test
 import torch
 from tqdm import tqdm
 import math
