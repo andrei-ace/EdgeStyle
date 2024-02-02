@@ -12,7 +12,7 @@ import numpy as np
 
 
 RESOLUTION = 512
-RESOLUTION_PATCH = 16
+RESOLUTION_PATCH = [8, 16, 32, 64]
 
 BG_COLOR = (127, 127, 127)
 BG_COLOR_CONTROLNET = (0, 0, 0)
@@ -36,8 +36,8 @@ CONDITIONING_IMAGES_TRANSFORMS = transforms.Compose(
 
 
 class PatchedTransform:
-    def __init__(self, patch_size, color_percentage, color=(127, 127, 127)):
-        self.patch_size = patch_size
+    def __init__(self, patch_sizes, color_percentage, color=(127, 127, 127)):
+        self.patch_sizes = patch_sizes
         self.color_percentage = color_percentage
         self.color = torch.tensor(color, dtype=torch.float32) / 255.0
 
@@ -45,9 +45,11 @@ class PatchedTransform:
         # Convert image to tensor
         img_tensor = TF.to_tensor(img)
 
+        patch_size = random.choice(self.patch_sizes)
+
         # Calculate number of patches
-        patches_horizontal = img_tensor.size(2) // self.patch_size
-        patches_vertical = img_tensor.size(1) // self.patch_size
+        patches_horizontal = img_tensor.size(2) // patch_size
+        patches_vertical = img_tensor.size(1) // patch_size
 
         # Flatten the 2D grid of patches and decide which patches to color
         total_patches = patches_vertical * patches_horizontal
@@ -56,11 +58,11 @@ class PatchedTransform:
 
         # Color the selected patches
         for idx in indices_to_color:
-            row = (idx // patches_horizontal) * self.patch_size
-            col = (idx % patches_horizontal) * self.patch_size
-            img_tensor[
-                :, row : row + self.patch_size, col : col + self.patch_size
-            ] = self.color.view(3, 1, 1)
+            row = (idx // patches_horizontal) * patch_size
+            col = (idx % patches_horizontal) * patch_size
+            img_tensor[:, row : row + patch_size, col : col + patch_size] = (
+                self.color.view(3, 1, 1)
+            )
 
         return TF.to_pil_image(img_tensor)
 
@@ -341,22 +343,28 @@ class CollateFn:
 
         # Apply patched transform to various image types
         patched_original = [
-            patched_transform(ex["original"])
-            if random.random() < self.proportion_patchworks_images
-            else ex["original"]
+            (
+                patched_transform(ex["original"])
+                if random.random() < self.proportion_patchworks_images
+                else ex["original"]
+            )
             for ex in examples
         ]
         # patched_original = [ex["original"] for ex in examples]
         patched_agnostic = [
-            patched_transform(ex["agnostic"])
-            if random.random() < self.proportion_patchworks_images
-            else ex["agnostic"]
+            (
+                patched_transform(ex["agnostic"])
+                if random.random() < self.proportion_patchworks_images
+                else ex["agnostic"]
+            )
             for ex in examples
         ]
         patched_clothes = [
-            patched_transform(image)
-            if random.random() < self.proportion_patchworks_images
-            else image
+            (
+                patched_transform(image)
+                if random.random() < self.proportion_patchworks_images
+                else image
+            )
             for image in clothes_transformed
         ]
 
