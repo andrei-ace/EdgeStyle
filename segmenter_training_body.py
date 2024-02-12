@@ -60,7 +60,7 @@ ORIGINAL_SIZE = (600, 400)
 # scarf          17
 
 # KEEP_CATEGORIES = [4, 5, 6, 7, 8, 17]
-KEEP_CATEGORIES = [1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16, 17]  # face, body and bag
+KEEP_CATEGORIES = [1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 17]  # face, body
 # KEEP_CATEGORIES = range(1, 18)  # keep all categories except background and bag
 
 
@@ -127,7 +127,7 @@ class TrainableModel(L.LightningModule):
         super().__init__()
         self.loss = DiceCELoss(
             sigmoid=True,
-            squared_pred=False,
+            squared_pred=True,
             reduction="mean",
         )
         self.model = model
@@ -447,7 +447,7 @@ def main() -> None:
 
     trainer = L.Trainer(
         devices="auto",
-        max_epochs=10,
+        max_epochs=20,
         overfit_batches=0,
         fast_dev_run=False,
         callbacks=[model_checkpoint_callback],

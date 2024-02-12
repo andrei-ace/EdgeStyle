@@ -574,7 +574,7 @@ def main(args):
 
     prompts = best_embeddings([clothes])
 
-    guidance_scales = np.linspace(0.0, 15.0, NUM_IMAGES)
+    guidance_scales = np.linspace(1.0, 7.0, NUM_IMAGES)
 
     images = [
         subject,

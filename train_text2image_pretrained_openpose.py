@@ -33,7 +33,6 @@ from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
 from packaging import version
-from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, PretrainedConfig
 
@@ -44,6 +43,7 @@ from diffusers import (
     StableDiffusionControlNetPipeline,
     UNet2DConditionModel,
     UniPCMultistepScheduler,
+    ControlNetModel
 )
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version
@@ -54,10 +54,7 @@ from controllora import ControlLoRAModel
 from diffusers.training_utils import compute_snr
 
 from dataset_local import edgestyle_dataset, edgestyle_dataset_test
-from utils import CollateFn, CONDITIONING_IMAGES_TRANSFORMS, IMAGES_TRANSFORMS, BG_COLOR
-from PIL import Image
-
-
+from utils import CollateFn, CONDITIONING_IMAGES_TRANSFORMS
 from utils import InverseEmbeddings
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
@@ -117,6 +114,8 @@ def log_validation(
 
     image_logs = []
 
+    original_list = validation_batch["original"]
+
     agnostic_or_head_list = (
         validation_batch["agnostic"]
         if args.use_agnostic_images
@@ -126,20 +125,29 @@ def log_validation(
     clothes_list = validation_batch["clothes"]
     clothes_openpose_list = validation_batch["clothes_openpose"]
 
+    clothes2_list = validation_batch["clothes2"]
+    clothes_openpose2_list = validation_batch["clothes_openpose2"]
+
     prompts = inverse_embeddings(validation_batch["input_ids"])
 
     i = 0
     for (
+        original,
         agnostic_or_head,
         original_openpose,
         clothes,
         clothes_openpose,
+        clothes2,
+        clothes_openpose2,
         prompt,
     ) in zip(
+        original_list,
         agnostic_or_head_list,
         original_openpose_list,
         clothes_list,
         clothes_openpose_list,
+        clothes2_list,
+        clothes_openpose2_list,
         prompts,
     ):
         images = []
@@ -157,6 +165,8 @@ def log_validation(
                         original_openpose.unsqueeze(0),
                         clothes.unsqueeze(0),
                         clothes_openpose.unsqueeze(0),
+                        clothes2.unsqueeze(0),
+                        clothes_openpose2.unsqueeze(0),
                     ],
                     # guess_mode=True,
                     negative_prompt=NEGATIVE_PROMPT,
@@ -168,11 +178,23 @@ def log_validation(
 
         image_logs.append(
             {
+                "original": (original / 2 + 0.5).clamp(0, 1),
                 "conditional_images": [
-                    (agnostic_or_head / 2 + 0.5).clamp(0, 1),
-                    original_openpose,
-                    (clothes / 2 + 0.5).clamp(0, 1),
-                    clothes_openpose,
+                    (
+                        (agnostic_or_head / 2 + 0.5).clamp(0, 1)
+                        if args.controllora_use_vae
+                        else agnostic_or_head
+                    ),
+                    (
+                        (clothes / 2 + 0.5).clamp(0, 1)
+                        if args.controllora_use_vae
+                        else clothes
+                    ),
+                    (
+                        (clothes2 / 2 + 0.5).clamp(0, 1)
+                        if args.controllora_use_vae
+                        else clothes2
+                    ),
                 ],
                 "images": [CONDITIONING_IMAGES_TRANSFORMS(image) for image in images],
                 "validation_prompt": image_name,
@@ -183,11 +205,13 @@ def log_validation(
     for tracker in accelerator.trackers:
         if tracker.name == "tensorboard":
             for log in image_logs:
+                original = log["original"]
                 conditional_images = log["conditional_images"]
                 images = log["images"]
                 validation_prompt = log["validation_prompt"]
 
                 formatted_images = []
+                formatted_images.append(original)
                 for image in conditional_images:
                     formatted_images.append(image.cpu())
 
@@ -242,6 +266,13 @@ def parse_args(input_args=None):
         help="Path to pretrained VAE model or model identifier from huggingface.co/models.",
     )
     parser.add_argument(
+        "--pretrained_openpose_name_or_path",
+        type=str,
+        default=None,
+        required=True,
+        help="Path to pretrained openpose model or model identifier from huggingface.co/models.",
+    )
+    parser.add_argument(
         "--controlnet_model_name_or_path",
         type=str,
         default=None,
@@ -259,6 +290,12 @@ def parse_args(input_args=None):
         type=int,
         default=0,
         help=("The dimension of the Conv2d Module LoRA update matrices."),
+    )
+    parser.add_argument(
+        "--controllora_use_vae",
+        action="store_true",
+        default=False,
+        help=("Whether to use the VAE in the controlnet."),
     )
     parser.add_argument(
         "--revision",
@@ -696,33 +733,47 @@ def main(args):
     unet.requires_grad_(False)
     text_encoder.requires_grad_(False)
 
+    # For mixed precision training we cast the text_encoder and vae weights to half-precision
+    # as these models are only used for inference, keeping weights in full precision is not required.
+    weight_dtype = torch.float32
+    if accelerator.mixed_precision == "fp16":
+        weight_dtype = torch.float16
+    elif accelerator.mixed_precision == "bf16":
+        weight_dtype = torch.bfloat16
+
+    openpose = ControlNetModel.from_pretrained(
+        args.pretrained_openpose_name_or_path, torch_dtype=weight_dtype
+    )
+    openpose.requires_grad_(False)
+
     if args.controlnet_model_name_or_path:
         controlnet = MultiControlNetModel(
             [
                 ControlLoRAModel.from_pretrained(
                     args.controlnet_model_name_or_path,
                     subfolder="controlnet-0",
-                    vae=vae,
+                    vae=vae if args.controllora_use_vae else None,
                 ),
+                openpose,
                 ControlLoRAModel.from_pretrained(
                     args.controlnet_model_name_or_path,
                     subfolder="controlnet-1",
+                    vae=vae if args.controllora_use_vae else None,
                 ),
+                openpose,
                 ControlLoRAModel.from_pretrained(
                     args.controlnet_model_name_or_path,
                     subfolder="controlnet-2",
-                    vae=vae,
+                    vae=vae if args.controllora_use_vae else None,
                 ),
-                ControlLoRAModel.from_pretrained(
-                    args.controlnet_model_name_or_path,
-                    subfolder="controlnet-3",
-                ),
+                openpose,
             ]
         )
         for net in controlnet.nets:
-            if net.uses_vae:
-                net.set_autoencoder(vae)
-            net.tie_weights(unet)
+            if net is not openpose:
+                if net.uses_vae:
+                    net.set_autoencoder(vae)
+                net.tie_weights(unet)
     else:
         logger.info("Initializing controlnet weights from unet")
         controlnet = MultiControlNetModel(
@@ -731,27 +782,29 @@ def main(args):
                     unet,
                     lora_linear_rank=args.controllora_linear_rank,
                     lora_conv2d_rank=args.controllora_conv2d_rank,
-                    autoencoder=vae,
+                    autoencoder=vae if args.controllora_use_vae else None,
                 ),
+                openpose,
                 ControlLoRAModel.from_unet(
                     unet,
                     lora_linear_rank=args.controllora_linear_rank,
                     lora_conv2d_rank=args.controllora_conv2d_rank,
+                    autoencoder=vae if args.controllora_use_vae else None,
                 ),
+                openpose,
                 ControlLoRAModel.from_unet(
                     unet,
                     lora_linear_rank=args.controllora_linear_rank,
                     lora_conv2d_rank=args.controllora_conv2d_rank,
-                    autoencoder=vae,
+                    autoencoder=vae if args.controllora_use_vae else None,
                 ),
-                ControlLoRAModel.from_unet(
-                    unet,
-                    lora_linear_rank=args.controllora_linear_rank,
-                    lora_conv2d_rank=args.controllora_conv2d_rank,
-                ),
+                openpose,
             ]
         )
-    controlnet.train()
+
+    for net in controlnet.nets:
+        if net is not openpose:
+            net.train()
 
     # `accelerate` 0.16.0 will have better support for customized saving
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
@@ -763,15 +816,18 @@ def main(args):
                 while len(weights) > 0:
                     weights.pop()
                     model = models[i]
-                    for j, net in enumerate(model.nets):
-                        if net.uses_vae:
-                            net.set_autoencoder(None)
-                        net.save_pretrained(
-                            os.path.join(output_dir, f"controlnet-{j}"),
-                            save_checkpoint=True,
-                        )
-                        if net.uses_vae:
-                            net.set_autoencoder(vae)
+                    j = 0
+                    for net in model.nets:
+                        if net is not openpose:
+                            if net.uses_vae:
+                                net.set_autoencoder(None)
+                            net.save_pretrained(
+                                os.path.join(output_dir, f"controlnet-{j}"),
+                                save_checkpoint=True,
+                            )
+                            if net.uses_vae:
+                                net.set_autoencoder(vae)
+                            j += 1
                     i -= 1
 
         def load_model_hook(models, input_dir):
@@ -780,17 +836,23 @@ def main(args):
                 # pop models so that they are not loaded again
                 model = models.pop()
 
-                for j, net in enumerate(model.nets):
-                    load_model = ControlLoRAModel.from_pretrained(
-                        input_dir, subfolder=f"controlnet-{j}", uses_vae=net.uses_vae
-                    )
-                    if net.uses_vae:
-                        load_model.set_autoencoder(vae)
-                    net.load_state_dict(load_model.state_dict())
-                    del load_model
+                j = 0
+                for net in model.nets:
+                    if net is not openpose:
+                        load_model = ControlLoRAModel.from_pretrained(
+                            input_dir,
+                            subfolder=f"controlnet-{j}",
+                            uses_vae=net.uses_vae,
+                        )
+                        if net.uses_vae:
+                            load_model.set_autoencoder(vae)
+                        net.load_state_dict(load_model.state_dict())
+                        del load_model
+                        j += 1
 
                 for net in model.nets:
-                    net.tie_weights(unet)
+                    if net is not openpose:
+                        net.tie_weights(unet)
 
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
@@ -801,10 +863,12 @@ def main(args):
         " doing mixed precision training, copy of the weights should still be float32."
     )
 
-    if accelerator.unwrap_model(controlnet).dtype != torch.float32:
-        raise ValueError(
-            f"Controlnet loaded as datatype {accelerator.unwrap_model(controlnet).dtype}. {low_precision_error_string}"
-        )
+    for net in controlnet.nets:
+        if net is not openpose:
+            if accelerator.unwrap_model(net).dtype != torch.float32:
+                raise ValueError(
+                    f"Controlnet loaded as datatype {accelerator.unwrap_model(controlnet).dtype}. {low_precision_error_string}"
+                )
 
     # Enable TF32 for faster training on Ampere GPUs,
     # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
@@ -891,6 +955,7 @@ def main(args):
         proportion_patchworked_images=args.proportion_patchworked_images,
         proportion_cutout_images=args.proportion_cutout_images,
         proportion_patchworks=args.proportion_patchworks,
+        uses_vae=args.controllora_use_vae,
     )
 
     train_dataloader = torch.utils.data.DataLoader(
@@ -901,7 +966,10 @@ def main(args):
         num_workers=args.dataloader_num_workers,
     )
 
-    test_collate_fn = CollateFn(empty_prompt=empty_prompt)
+    test_collate_fn = CollateFn(
+        empty_prompt=empty_prompt,
+        uses_vae=args.controllora_use_vae,
+    )
 
     test_dataloader = torch.utils.data.DataLoader(
         edgestyle_dataset_test,
@@ -944,18 +1012,12 @@ def main(args):
         controlnet, optimizer, train_dataloader, lr_scheduler
     )
 
-    # For mixed precision training we cast the text_encoder and vae weights to half-precision
-    # as these models are only used for inference, keeping weights in full precision is not required.
-    weight_dtype = torch.float32
-    if accelerator.mixed_precision == "fp16":
-        weight_dtype = torch.float16
-    elif accelerator.mixed_precision == "bf16":
-        weight_dtype = torch.bfloat16
-
     # Move vae, unet and text_encoder to device and cast to weight_dtype
-    vae.to(accelerator.device, dtype=torch.float32)  # vae should always be in fp32
+    # vae.to(accelerator.device, dtype=torch.float32)  # vae should always be in fp32
+    vae.to(accelerator.device, dtype=weight_dtype)
     unet.to(accelerator.device, dtype=weight_dtype)
     text_encoder.to(accelerator.device, dtype=weight_dtype)
+    openpose.to(accelerator.device, dtype=weight_dtype)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(
@@ -1040,6 +1102,7 @@ def main(args):
                 with torch.autocast("cuda"):
                     # Convert images to latent space
                     latents = vae.encode(batch["original"]).latent_dist.sample()
+                    encoder_hidden_states = text_encoder(batch["input_ids"])[0]
                     latents = latents * vae.config.scaling_factor
 
                     # Sample noise that we'll add to the latents
@@ -1058,14 +1121,28 @@ def main(args):
                     # (this is the forward diffusion process)
                     noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                    encoder_hidden_states = text_encoder(batch["input_ids"])[0]
-
                     agnostic_or_head = (
                         batch["agnostic"] if args.use_agnostic_images else batch["head"]
                     )
                     original_openpose = batch["original_openpose"]
                     clothes = batch["clothes"]
                     clothes_openpose = batch["clothes_openpose"]
+                    clothes2 = batch["clothes2"]
+                    clothes_openpose2 = batch["clothes_openpose2"]
+
+                    # randomly swap the clothes with clothes2 for each image and pose in the batch
+
+                    for i in range(bsz):
+                        if random.random() < 0.5:
+                            clothes[i], clothes2[i] = clothes2[i], clothes[i]
+                            clothes_openpose[i], clothes_openpose2[i] = (
+                                clothes_openpose2[i],
+                                clothes_openpose[i],
+                            )
+                        if random.random() < 0.5:
+                            agnostic_or_head[i] = batch["head"][i]
+                        else:
+                            agnostic_or_head[i] = batch["agnostic"][i]
 
                     down_block_res_samples, mid_block_res_sample = controlnet(
                         noisy_latents,
@@ -1076,6 +1153,8 @@ def main(args):
                             original_openpose,
                             clothes,
                             clothes_openpose,
+                            clothes2,
+                            clothes_openpose2,
                         ],
                         conditioning_scale=[1.0] * len(controlnet.nets),
                         return_dict=False,

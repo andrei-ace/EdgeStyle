@@ -127,7 +127,7 @@ class TrainableModel(L.LightningModule):
         super().__init__()
         self.loss = DiceCELoss(
             sigmoid=True,
-            squared_pred=False,
+            squared_pred=True,
             reduction="mean",
         )
         self.model = model
@@ -447,7 +447,7 @@ def main() -> None:
 
     trainer = L.Trainer(
         devices="auto",
-        max_epochs=10,
+        max_epochs=20,
         overfit_batches=0,
         fast_dev_run=False,
         callbacks=[model_checkpoint_callback],

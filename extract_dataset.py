@@ -3,6 +3,8 @@ import json
 import os
 import cv2
 import numpy as np
+from skimage.measure import label, regionprops
+from skimage.morphology import closing, square
 
 import pandas as pd
 import torch
@@ -34,6 +36,7 @@ IMAGE_WIDTH = 512
 IMAGE_HEIGHT = 512
 BOX_MARGIN = 0.1
 VIDEOS_PATH = "data/video"
+PHOTOS_PATH = "data/photo"
 IMAGES_PATH = "data/image"
 
 # MIN_CLOTHES_AREA = IMAGE_WIDTH * IMAGE_HEIGHT * 0.05
@@ -43,6 +46,7 @@ MODEL_PATH = "efficientvit/assets/checkpoints/sam/l2.pt"
 MODEL_PATH_SUBJECT = "efficientvit/assets/checkpoints/sam/trained_model_subject.pt"
 MODEL_PATH_AGNOSTIC = "efficientvit/assets/checkpoints/sam/trained_model_body.pt"
 MODEL_PATH_CLOTHES = "efficientvit/assets/checkpoints/sam/trained_model_clothes.pt"
+MODEL_PATH_HEAD = "efficientvit/assets/checkpoints/sam/trained_model_head.pt"
 
 # CLOTHES_THRESHOLD = IMAGE_HEIGHT * IMAGE_WIDTH * 0.05
 
@@ -52,9 +56,6 @@ model = torch.hub.load("ultralytics/yolov5", "yolov5s", pretrained=True)
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 openpose = OpenposeDetector.from_pretrained("lllyasviel/ControlNet").to(device=DEVICE)
-
-# sam_model = SamModel.from_pretrained("facebook/sam-vit-large").to(DEVICE)
-# sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-large")
 
 # build model
 efficientvit_sam = (
@@ -82,12 +83,13 @@ efficientvit_sam_clothes = (
 )
 efficientvit_sam_predictor_clothes = EfficientViTSamPredictor(efficientvit_sam_clothes)
 
-prompts = (
-    "quality",
-    "real",
-    "natural",
-    "sharpness",
+# head
+efficientvit_sam_head = (
+    create_sam_model(MODEL_NAME, True, MODEL_PATH_HEAD).to(device=DEVICE).eval()
 )
+efficientvit_sam_predictor_head = EfficientViTSamPredictor(efficientvit_sam_head)
+
+prompts = ("quality", "sharpness")
 
 
 def get_prompt(prompt):
@@ -158,7 +160,7 @@ def create_processed_image(row, final_width=IMAGE_WIDTH, final_height=IMAGE_HEIG
     if top_left_y + final_height > new_height:
         top_left_y = new_height - final_height
 
-    # Crop the image to get the final 512x512 image
+    # Crop the image to get the final IMAGE_WIDTHxIMAGE_HEIGHT image
     final_image = resized_image.crop(
         (top_left_x, top_left_y, top_left_x + final_width, top_left_y + final_height)
     )
@@ -342,7 +344,6 @@ def smooth_mask(mask, kernel_size=3, iterations=3):
     opened = cv2.erode(closed, kernel, iterations=iterations)
     smoothed_mask = cv2.dilate(opened, kernel, iterations=iterations)
 
-    # Convert back to boolean format and return
     return smoothed_mask > 0
 
 
@@ -350,9 +351,8 @@ def smooth_mask(mask, kernel_size=3, iterations=3):
 def create_sam_images(row):
     original_image = np.array(row["image"])
     openpose_json = row["openpose_json"]
-    openpose_image = row["openpose_image"]
     if openpose_json is None:
-        return None, None, None, None, None
+        return None, None, None, None, None, None
     openpose_keypoints = openpose_json["keypoints"]
 
     points = [
@@ -386,10 +386,9 @@ def create_sam_images(row):
     subject_scores = subject_scores[0]
 
     if subject_scores < SUBJECT_SCORE_THRESHOLD:
-        return None, None, None, None, None
+        return None, None, None, None, None, None
 
-    # all_masks = np.logical_or(all_masks, subject_masks)
-    all_masks = smooth_mask(subject_masks)
+    all_masks = smooth_mask(closing(subject_masks, square(3)))
 
     efficientvit_sam_predictor_agnostic.set_image(original_image)
     (
@@ -400,7 +399,9 @@ def create_sam_images(row):
         box=box,
         multimask_output=False,
     )
-    predicted_agnostic_mask = smooth_mask(predicted_agnostic_mask[0])
+    predicted_agnostic_mask = smooth_mask(
+        closing(predicted_agnostic_mask[0], square(3))
+    )
 
     efficientvit_sam_predictor_clothes.set_image(original_image)
     (
@@ -411,24 +412,51 @@ def create_sam_images(row):
         box=box,
         multimask_output=False,
     )
-    predicted_clothes_mask = smooth_mask(predicted_clothes_mask[0])
+    predicted_clothes_mask = smooth_mask(closing(predicted_clothes_mask[0], square(3)))
 
-    all_masks = np.logical_or(
-        all_masks, np.logical_or(predicted_agnostic_mask, predicted_clothes_mask)
+    efficientvit_sam_predictor_head.set_image(original_image)
+    (
+        predicted_head_mask,
+        _,
+        _,
+    ) = efficientvit_sam_predictor_head.predict(
+        box=box,
+        multimask_output=False,
     )
+    predicted_head_mask = smooth_mask(closing(predicted_head_mask[0], square(7)))
 
-    all_masks = smooth_mask(all_masks)
+    agnostic_mask = np.logical_or(predicted_agnostic_mask, predicted_head_mask)
+    all_masks = np.logical_or(all_masks, predicted_clothes_mask)
+    all_masks = np.logical_or(all_masks, predicted_head_mask)
 
-    unknown_mask = smooth_mask(
-        np.logical_and(predicted_agnostic_mask, predicted_clothes_mask)
-    )
+    labeled_array = label(all_masks)
+    # Measure the properties of each component
+    regions = regionprops(labeled_array)
+    # Find the largest component by area
+    largest_area = 0
+    largest_component_label = 0
+    for region in regions:
+        if region.area > largest_area:
+            largest_area = region.area
+            largest_component_label = region.label
+
+    # Keep only the largest component
+    largest_component = labeled_array == largest_component_label
+
+    all_masks = smooth_mask(largest_component)
+
+    unknown_mask = np.logical_and(predicted_agnostic_mask, predicted_clothes_mask)
 
     agnostic_mask = np.logical_and(
         predicted_agnostic_mask, np.logical_not(unknown_mask)
     )
-    agnostic_mask = smooth_mask(agnostic_mask)
+    clothes_mask = np.logical_and(predicted_clothes_mask, np.logical_not(unknown_mask))
 
-    clothes_mask = predicted_clothes_mask
+    agnostic_mask = np.logical_and(agnostic_mask, all_masks)
+    head_mask = np.logical_and(predicted_head_mask, all_masks)
+    clothes_mask = np.logical_and(clothes_mask, all_masks)
+
+    # clothes_mask = smooth_mask(clothes_mask)
 
     subject_image = Image.fromarray(
         draw_binary_mask(
@@ -447,14 +475,25 @@ def create_sam_images(row):
     )
     agnostic_image = Image.fromarray(
         draw_binary_mask(
-            original_image, agnostic_mask.squeeze(), mask_color=(127, 127, 127)
+            original_image,
+            agnostic_mask.squeeze(),
+            mask_color=(127, 127, 127),
+        ),
+        mode="RGB",
+    )
+
+    head_image = Image.fromarray(
+        draw_binary_mask(
+            original_image, head_mask.squeeze(), mask_color=(127, 127, 127)
         ),
         mode="RGB",
     )
 
     clothes_image = Image.fromarray(
         draw_binary_mask(
-            original_image, clothes_mask.squeeze(), mask_color=(127, 127, 127)
+            original_image,
+            clothes_mask.squeeze(),
+            mask_color=(127, 127, 127),
         ),
         mode="RGB",
     )
@@ -465,6 +504,7 @@ def create_sam_images(row):
         mask_image,
         agnostic_image,
         clothes_image,
+        head_image,
     )
 
 
@@ -500,34 +540,83 @@ def process_batch(batch) -> pd.DataFrame:
     return data
 
 
-def extract_frames(video_path, fps):
-    # Load the video
-    video = cv2.VideoCapture(video_path)
+def extract_photos(photo_path):
+    IMAGES = []
+    for filename in os.listdir(photo_path):
+        if filename.endswith(".jpg"):
+            # read as RGB image
+            image = Image.open(os.path.join(photo_path, filename)).convert("RGB")
+            IMAGES.append(np.array(image))
+    data = process_batch(IMAGES)
+    if data is not None:
+        data = create_sam_images_for_batch(data)
+    return data
 
-    # extract at least 4 * BATCH_SIZE frames
-    # get file length
+
+def create_sam_images_for_batch(data):
+    data["openpose_image"] = None
+    data["openpose_json"] = None
+    data["sam_scores"] = None
+    data["subject_image"] = None
+    data["mask_image"] = None
+    data["agnostic_image"] = None
+    data["clothes_image"] = None
+    data["head_image"] = None
+    for index in tqdm(range(data.shape[0])):
+        row = data.iloc[index]
+        image = create_processed_image(row)
+        data.at[index, "image"] = image
+
+        row = data.iloc[index]
+        # create openpose image
+        openpose_image, openpose_json = create_openpose(row)
+        data.at[index, "openpose_image"] = openpose_image
+        data.at[index, "openpose_json"] = openpose_json
+
+        row = data.iloc[index]
+        # create sam images
+        (
+            sam_scores,
+            subject_image,
+            mask_image,
+            agnostic_image,
+            clothes_image,
+            head_image,
+        ) = create_sam_images(row)
+        data.at[index, "sam_scores"] = sam_scores
+        data.at[index, "subject_image"] = subject_image
+        data.at[index, "mask_image"] = mask_image
+        data.at[index, "agnostic_image"] = agnostic_image
+        data.at[index, "clothes_image"] = clothes_image
+        data.at[index, "head_image"] = head_image
+    return data
+
+
+def extract_frames(video_path, fps):
+    video = cv2.VideoCapture(video_path)
     frame_count = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-    # compute frame interval
     frame_interval = int(frame_count / (BATCH_SIZE * 4))
 
-    if frame_interval < int(video.get(cv2.CAP_PROP_FPS) / fps):
-        frame_interval = int(video.get(cv2.CAP_PROP_FPS) / fps)
+    fps_from_video = int(video.get(cv2.CAP_PROP_FPS))
+    if frame_interval < fps_from_video / fps:
+        frame_interval = int(fps_from_video / fps)
 
     print(f"Extracting frames every {frame_interval} frames from video {video_path}.")
 
     frame_count = 0
     extracted_count = 0
-
-    data = None
+    batch_data_list = []  # Initialize an empty list to store data from each batch
     IMAGES = []
+
     while True:
         success, frame = video.read()
-
         if not success:
-            if len(IMAGES) > 0:
+            if IMAGES:  # If there are remaining images to process
                 data_from_batch = process_batch(IMAGES)
                 if data_from_batch is not None:
-                    data = pd.concat([data, data_from_batch], ignore_index=True)
+                    batch_data_list.append(
+                        data_from_batch
+                    )  # Append the processed batch data to the list
             break
 
         if frame_count % frame_interval == 0:
@@ -536,55 +625,144 @@ def extract_frames(video_path, fps):
             IMAGES.append(frame)
 
         frame_count += 1
-
         print(f"Extracted {extracted_count} frames.", end="\r")
 
-        if len(IMAGES) > 0 and extracted_count % BATCH_SIZE == 0:
+        if IMAGES and extracted_count % BATCH_SIZE == 0:
             data_from_batch = process_batch(IMAGES)
             if data_from_batch is not None:
-                data = pd.concat([data, data_from_batch], ignore_index=True)
+                batch_data_list.append(
+                    data_from_batch
+                )  # Append the processed batch data to the list
             IMAGES = []
 
     video.release()
     print(f"Extracted {extracted_count} frames.")
-    # apply lambda function to create processed images
-    if data is not None:
-        data["openpose_image"] = None
-        data["openpose_json"] = None
-        data["sam_scores"] = None
-        data["subject_image"] = None
-        data["mask_image"] = None
-        data["agnostic_image"] = None
-        data["clothes_image"] = None
-        for index in tqdm(range(data.shape[0])):
-            row = data.iloc[index]
-            image = create_processed_image(row)
-            data.at[index, "image"] = image
 
-            row = data.iloc[index]
-            # create openpose image
-            openpose_image, openpose_json = create_openpose(row)
-            data.at[index, "openpose_image"] = openpose_image
-            data.at[index, "openpose_json"] = openpose_json
+    # Once all frames have been processed, concatenate all batch data
+    if batch_data_list:
+        data = pd.concat(batch_data_list, ignore_index=True)
+        if data.shape[0] > BATCH_SIZE:
+            data = data.sample(n=BATCH_SIZE, replace=True, ignore_index=True)
+        data = create_sam_images_for_batch(data)
+    else:
+        data = None
 
-            row = data.iloc[index]
-            # create sam images
-            (
-                sam_scores,
-                subject_image,
-                mask_image,
-                agnostic_image,
-                clothes_image,
-            ) = create_sam_images(row)
-            data.at[index, "sam_scores"] = sam_scores
-            data.at[index, "subject_image"] = subject_image
-            data.at[index, "mask_image"] = mask_image
-            data.at[index, "agnostic_image"] = agnostic_image
-            data.at[index, "clothes_image"] = clothes_image
     return data
 
 
+def process_data(data, image_path):
+    if data is None:
+        print(f"Skipping {filename}. Could not detect any person.")
+        return
+    else:
+        # remove rows without image or openpose image (no person detected)
+        data = data[data["image"].notna()]
+        data = data[data["openpose_image"].notna()]
+        data = data[data["subject_image"].notna()]
+        data = data[data["mask_image"].notna()]
+        data = data[data["agnostic_image"].notna()]
+        data = data[data["clothes_image"].notna()]
+        data = data[data["head_image"].notna()]
+
+        if data.shape[0] < 3:
+            print(f"Skipping {filename}. Too few images to process.")
+            return
+
+        # only keep maximum BATCH_SIZE frames, randomly sampled
+        # if data.shape[0] > BATCH_SIZE:
+        #     data = data.sample(n=BATCH_SIZE, replace=True, ignore_index=True)
+
+        for score_column in score_columns:
+            data[score_column] = 0.0
+
+        # create batches of size BATCH_SIZE
+        for i in tqdm(range(0, len(data), BATCH_SIZE)):
+            with torch.inference_mode():
+                batch = data.iloc[i : i + BATCH_SIZE]
+                if batch.shape[0] == 0:
+                    break
+
+                image_tensor = torch.stack(
+                    [pil_to_tensor(image) for image in batch["subject_image"]]
+                ).to(DEVICE)
+                with torch.inference_mode():
+                    batch_scores = image_quality_assessment(image_tensor)
+
+                for i, score_column in enumerate(score_columns):
+                    key = list(batch_scores.keys())[i]
+                    batch.loc[:, score_column] = batch_scores[key].cpu().numpy()
+
+        # compute mean score
+        data["mean_score"] = data[score_columns].mean(axis=1)
+
+        # compute score
+        data["score"] = data[["sam_scores", "mean_score"]].mean(axis=1)
+
+        data = data.sort_values(by="score", ascending=False)
+
+        # if at least double the number of frames, keep only the top half and sample
+        if data.shape[0] > MAX_FRAMES * 2:
+            data = data.head(data.shape[0] // 2)
+            data = data.sample(n=MAX_FRAMES, replace=True, ignore_index=True)
+        else:
+            # keep only MAX_FRAMES rows
+            data = data.head(MAX_FRAMES)
+
+        # print(data[["score", "mean_score"]])
+
+        os.makedirs(image_path, exist_ok=True)
+        os.makedirs(os.path.join(image_path, "processed"), exist_ok=True)
+        os.makedirs(os.path.join(image_path, "openpose"), exist_ok=True)
+        os.makedirs(os.path.join(image_path, "subject"), exist_ok=True)
+        os.makedirs(os.path.join(image_path, "mask"), exist_ok=True)
+        os.makedirs(os.path.join(image_path, "agnostic"), exist_ok=True)
+        os.makedirs(os.path.join(image_path, "head"), exist_ok=True)
+        os.makedirs(os.path.join(image_path, "clothes"), exist_ok=True)
+        for index in range(data.shape[0]):
+            row = data.iloc[index]
+            # save images
+            image = row["image"]
+            openpose_image = row["openpose_image"]
+            openpose_json = row["openpose_json"]
+            subject_image = row["subject_image"]
+            mask_image = row["mask_image"]
+            agnostic_image = row["agnostic_image"]
+            head_image = row["head_image"]
+            clothes_image = row["clothes_image"]
+            image.save(os.path.join(image_path, "processed", f"{index}.jpg"), "JPEG")
+            openpose_image.save(
+                os.path.join(image_path, "openpose", f"{index}.jpg"), "JPEG"
+            )
+            subject_image.save(
+                os.path.join(image_path, "subject", f"{index}.jpg"), "JPEG"
+            )
+            mask_image.save(os.path.join(image_path, "mask", f"{index}.jpg"), "JPEG")
+            agnostic_image.save(
+                os.path.join(image_path, "agnostic", f"{index}.jpg"), "JPEG"
+            )
+            clothes_image.save(
+                os.path.join(image_path, "clothes", f"{index}.jpg"), "JPEG"
+            )
+            head_image.save(os.path.join(image_path, "head", f"{index}.jpg"), "JPEG")
+            json_file = os.path.join(image_path, "openpose", f"{index}.json")
+            json.dump(openpose_json, open(json_file, "w"))
+
+        print(f"Keeping {data.shape[0]} frames for {filename}.")
+
+
 if __name__ == "__main__":
+    # get all photos from directory
+    filenames = os.listdir(PHOTOS_PATH)
+    # sort filenames
+    filenames = sorted(filenames)
+    for filename in tqdm(filenames):
+        image_path = os.path.join(IMAGES_PATH, filename)
+        image_path_skip = os.path.join(IMAGES_PATH, filename + "_skip_")
+        if os.path.exists(image_path) or os.path.exists(image_path_skip):
+            continue
+        data = extract_photos(os.path.join(PHOTOS_PATH, filename))
+        process_data(data, image_path)
+
     # get all videos from directory
     filenames = os.listdir(VIDEOS_PATH)
     # sort filenames
@@ -594,114 +772,10 @@ if __name__ == "__main__":
         if os.path.isfile(os.path.join(VIDEOS_PATH, filename)) and (
             filename.endswith(".qt") or filename.endswith(".mp4")
         ):
-            image_path = os.path.join(IMAGES_PATH, filename.replace(".qt", ""))
-            image_path = image_path.replace(".mp4", "")
-            if os.path.exists(image_path):
+            dirname = filename.replace(".qt", "").replace(".mp4", "")
+            image_path = os.path.join(IMAGES_PATH, dirname)
+            image_path_skip = os.path.join(IMAGES_PATH, dirname + "_skip_")
+            if os.path.exists(image_path) or os.path.exists(image_path_skip):
                 continue
             data = extract_frames(os.path.join(VIDEOS_PATH, filename), FPS)
-            if data is None:
-                print(f"Skipping {filename}. Could not detect any person.")
-                continue
-            else:
-                # remove rows without image or openpose image (no person detected)
-                data = data[data["image"].notna()]
-                data = data[data["openpose_image"].notna()]
-                data = data[data["subject_image"].notna()]
-                data = data[data["mask_image"].notna()]
-                data = data[data["agnostic_image"].notna()]
-                data = data[data["clothes_image"].notna()]
-
-                if data.shape[0] < 2:
-                    print(f"Skipping {filename}. Too few images to process.")
-                    continue
-
-                # only keep maximum BATCH_SIZE frames, randomly sampled
-                # if data.shape[0] > BATCH_SIZE:
-                #     data = data.sample(n=BATCH_SIZE)
-
-                for score_column in score_columns:
-                    data[score_column] = 0.0
-
-                # create batches of size BATCH_SIZE
-                for i in tqdm(range(0, len(data), BATCH_SIZE)):
-                    with torch.inference_mode():
-                        batch = data.iloc[i : i + BATCH_SIZE]
-                        if batch.shape[0] == 0:
-                            break
-
-                        image_tensor = torch.stack(
-                            [pil_to_tensor(image) for image in batch["subject_image"]]
-                        ).to(DEVICE)
-                        with torch.inference_mode():
-                            batch_scores = image_quality_assessment(image_tensor)
-
-                        for i, score_column in enumerate(score_columns):
-                            key = list(batch_scores.keys())[i]
-                            batch.loc[:, score_column] = batch_scores[key].cpu().numpy()
-
-                # compute min and max and mean for each score to normalize
-                min_max = {}
-                for score_column in score_columns:
-                    min_max[score_column] = {
-                        "min": data[score_column].min(),
-                        "max": data[score_column].max(),
-                    }
-
-                # normalize scores
-                for score_column in score_columns:
-                    data[score_column] = (
-                        data[score_column] - min_max[score_column]["min"]
-                    ) / (min_max[score_column]["max"] - min_max[score_column]["min"])
-
-                # compute mean score
-                data["mean_score"] = data[score_columns].mean(axis=1)
-
-                # compute score
-                data["score"] = data[["sam_scores", "mean_score"]].mean(axis=1)
-
-                data = data.sort_values(by="score", ascending=False)
-
-                # keep only MAX_FRAMES rows
-                data = data.head(MAX_FRAMES)
-
-                # print(data[["score", "mean_score"]])
-
-                os.makedirs(image_path, exist_ok=True)
-                os.makedirs(os.path.join(image_path, "processed"), exist_ok=True)
-                os.makedirs(os.path.join(image_path, "openpose"), exist_ok=True)
-                os.makedirs(os.path.join(image_path, "subject"), exist_ok=True)
-                os.makedirs(os.path.join(image_path, "mask"), exist_ok=True)
-                os.makedirs(os.path.join(image_path, "agnostic"), exist_ok=True)
-                os.makedirs(os.path.join(image_path, "clothes"), exist_ok=True)
-                for index in range(data.shape[0]):
-                    row = data.iloc[index]
-                    # save images
-                    image = row["image"]
-                    openpose_image = row["openpose_image"]
-                    openpose_json = row["openpose_json"]
-                    subject_image = row["subject_image"]
-                    mask_image = row["mask_image"]
-                    agnostic_image = row["agnostic_image"]
-                    clothes_image = row["clothes_image"]
-                    image.save(
-                        os.path.join(image_path, "processed", f"{index}.jpg"), "JPEG"
-                    )
-                    openpose_image.save(
-                        os.path.join(image_path, "openpose", f"{index}.jpg"), "JPEG"
-                    )
-                    subject_image.save(
-                        os.path.join(image_path, "subject", f"{index}.jpg"), "JPEG"
-                    )
-                    mask_image.save(
-                        os.path.join(image_path, "mask", f"{index}.jpg"), "JPEG"
-                    )
-                    agnostic_image.save(
-                        os.path.join(image_path, "agnostic", f"{index}.jpg"), "JPEG"
-                    )
-                    clothes_image.save(
-                        os.path.join(image_path, "clothes", f"{index}.jpg"), "JPEG"
-                    )
-                    json_file = os.path.join(image_path, "openpose", f"{index}.json")
-                    json.dump(openpose_json, open(json_file, "w"))
-
-                print(f"Keeping {data.shape[0]} frames for {filename}.")
+            process_data(data, image_path)

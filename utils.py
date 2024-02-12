@@ -4,15 +4,15 @@ import torchvision.transforms.functional as TF
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 
+import math
 import random
-from PIL import Image
+from PIL import Image, ImageDraw
 import torch
-from transformers import CLIPProcessor, CLIPModel
 import numpy as np
 
 
 RESOLUTION = 512
-RESOLUTION_PATCH = [8, 16, 32, 64]
+RESOLUTION_PATCH = [16, 32, 64]
 
 BG_COLOR = (127, 127, 127)
 BG_COLOR_CONTROLNET = (0, 0, 0)
@@ -104,7 +104,7 @@ class PairedTransform:
         new_size = int(self.output_size * scale)
 
         # Random shift
-        dx, dy = random.randint(-20, 20), random.randint(-20, 20)
+        dx, dy = random.randint(-50, 50), random.randint(-50, 50)
 
         # Apply resizing, padding, cropping, and shifting to all images
         transformed_images = []
@@ -214,7 +214,243 @@ COLORS = [
     "magenta",
     "cream",
     "mint green",
+    # New colors added below
+    "charcoal",
+    "ivory",
+    "maroon",
+    "navy",
+    "ultramarine",
+    "cyan",
+    "electric blue",
+    "ruby",
+    "emerald",
+    "sapphire",
+    "amethyst",
+    "periwinkle",
+    "indigo",
+    "jade",
+    "citrus",
+    "sunflower",
+    "tangerine",
+    "raspberry",
+    "rose",
+    "violet",
+    "fuchsia",
+    "caramel",
+    "mocha",
+    "espresso",
+    "sky blue",
+    "forest green",
+    "sea green",
+    "olive drab",
+    "chartreuse",
+    "saffron",
+    "plum",
+    "sienna",
+    "ochre",
+    "mahogany",
+    "lemon",
+    "flamingo",
+    "lavender blush",
+    "midnight blue",
+    "neon green",
+    "neon pink",
+    "pastel blue",
+    "pastel green",
+    "pastel yellow",
+    "pastel pink",
+    "pastel purple",
+    "metallic gold",
+    "metallic silver",
+    "metallic copper",
+    "powder blue",
+    "gunmetal",
+    "ash gray",
+    "electric lime",
+    "bubblegum pink",
+    "peach puff",
+    "midnight green",
+    "azure",
+    "carmine",
+    "cerulean",
+    "burnt orange",
+    "burnt sienna",
+    "burnt umber",
+    "champagne",
+    "copper",
+    "crimson",
+    "denim",
+    "eggplant",
+    "fern green",
+    "firebrick",
+    "flax",
+    "french blue",
+    "frostbite",
+    "gainsboro",
+    "gamboge",
+    "ghost white",
+    "ginger",
+    "glitter",
+    "harlequin",
+    "honeydew",
+    "hot pink",
+    "hunter green",
+    "iceberg",
+    "inchworm",
+    "jazzberry jam",
+    "jet",
+    "jonquil",
+    "kelly green",
+    "lemon chiffon",
+    "licorice",
+    "lilac",
+    "lime",
+    "linen",
+    "mango",
+    "mauve",
+    "midnight",
+    "mint cream",
+    "misty rose",
+    "moss green",
+    "mountbatten pink",
+    "navajo white",
+    "neon blue",
+    "old gold",
+    "old lace",
+    "old rose",
+    "olivine",
+    "onyx",
+    "opal",
+    "orchid",
+    "pale aqua",
+    "pale cerulean",
+    "pale pink",
+    "pale taupe",
+    "pansy purple",
+    "papaya whip",
+    "pastel orange",
+    "pear",
+    "periwinkle blue",
+    "persimmon",
+    "pine green",
+    "pink lace",
+    "pistachio",
+    "platinum",
+    "prussian blue",
+    "pumpkin",
+    "quartz",
+    "queen blue",
+    "quicksilver",
+    "quince",
+    "rackley",
+    "raspberry pink",
+    "raw umber",
+    "razzmatazz",
+    "red-violet",
+    "rich black",
+    "robin egg blue",
+    "rocket metallic",
+    "roman silver",
+    "rose quartz",
+    "rosewood",
+    "royal blue",
+    "royal purple",
+    "ruby red",
+    "russet",
+    "rust",
+    "safety orange",
+    "sage",
+    "sandy brown",
+    "sangria",
+    "sapphire blue",
+    "scarlet",
+    "school bus yellow",
+    "sea blue",
+    "seafoam green",
+    "sepia",
+    "shadow",
+    "shamrock green",
+    "shocking pink",
+    "silver sand",
+    "sinopia",
+    "slate blue",
+    "slate gray",
+    "smalt",
+    "smokey topaz",
+    "snow",
+    "soap",
+    "soft amber",
+    "soft peach",
+    "solid pink",
+    "spring bud",
+    "spring green",
+    "steel blue",
+    "straw",
+    "sunset",
+    "tan hide",
+    "tawny",
+    "telemagenta",
+    "thistle",
+    "tiffany blue",
+    "timberwolf",
+    "titanium yellow",
+    "tomato",
+    "toolbox",
+    "topaz",
+    "true blue",
+    "tufts blue",
+    "tulip",
+    "tumbleweed",
+    "turkish rose",
+    "turtle green",
+    "tuscan",
+    "tuscan brown",
+    "tuscan red",
+    "tuscan tan",
+    "tuscany",
+    "twilight lavender",
+    "tyrian purple",
+    "ube",
+    "ucla blue",
+    "ufo green",
+    "ultra pink",
+    "ultramarine blue",
+    "umber",
+    "unbleached silk",
+    "unmellow yellow",
+    "upsdell red",
+    "urobilin",
+    "van dyke brown",
+    "vanilla",
+    "vanilla ice",
+    "vegas gold",
+    "venetian red",
+    "verdigris",
+    "vermilion",
+    "veronica",
+    "violet-blue",
+    "violet-red",
+    "viridian",
+    "warm black",
+    "wheat",
+    "white smoke",
+    "wild blue yonder",
+    "wild orchid",
+    "wild strawberry",
+    "wild watermelon",
+    "willow green",
+    "windsor tan",
+    "wine",
+    "wisteria",
+    "xanadu",
+    "yale blue",
+    "yellow green",
+    "yellow orange",
+    "yellow sunshine",
+    "zaffre",
+    "zinnwaldite brown",
 ]
+
 
 CLOTHING_ITEMS = [
     "tshirt",
@@ -249,6 +485,162 @@ CLOTHING_ITEMS = [
     "leggings",
     "stockings",
     "tights",
+    "cargo pants",
+    "chinos",
+    "culottes",
+    "palazzo pants",
+    "capri pants",
+    "harem pants",
+    "sweatpants",
+    "joggers",
+    "leather pants",
+    "slacks",
+    "trousers",
+    "bell-bottoms",
+    "flared pants",
+    "high-rise jeans",
+    "low-rise jeans",
+    "mid-rise jeans",
+    "skinny jeans",
+    "straight-leg jeans",
+    "bootcut jeans",
+    "boyfriend jeans",
+    "mom jeans",
+    "bikini",
+    "swimsuit",
+    "monokini",
+    "tankini",
+    "burkini",
+    "sarong",
+    "kaftan",
+    "wrap dress",
+    "shift dress",
+    "sheath dress",
+    "sundress",
+    "maxi dress",
+    "mini dress",
+    "midi dress",
+    "bodycon dress",
+    "peplum dress",
+    "A-line dress",
+    "ball gown",
+    "cocktail dress",
+    "evening gown",
+    "halter dress",
+    "wrap skirt",
+    "pencil skirt",
+    "A-line skirt",
+    "maxi skirt",
+    "mini skirt",
+    "midi skirt",
+    "pleated skirt",
+    "circle skirt",
+    "bubble skirt",
+    "tulle skirt",
+    "leather skirt",
+    "denim skirt",
+    "cargo shorts",
+    "bermuda shorts",
+    "board shorts",
+    "cycling shorts",
+    "leather jacket",
+    "denim jacket",
+    "bomber jacket",
+    "flight jacket",
+    "motorcycle jacket",
+    "varsity jacket",
+    "puffer jacket",
+    "rain jacket",
+    "windbreaker",
+    "pea coat",
+    "trench coat",
+    "duster coat",
+    "fur coat",
+    "long coat",
+    "overcoat",
+    "poncho",
+    "shawl",
+    "stole",
+    "bolero",
+    "shrug",
+    "crop top",
+    "halter top",
+    "peplum top",
+    "polo shirt",
+    "henley shirt",
+    "camisole",
+    "tube top",
+    "bodysuit",
+    "corset",
+    "bustier",
+    "bralette",
+    "bandeau",
+    "crop jacket",
+    "utility jacket",
+    "double-breasted suit",
+    "single-breasted suit",
+    "tuxedo",
+    "morning suit",
+    "evening suit",
+    "tailcoat",
+    "waistcoat",
+    "cummerbund",
+    "ascot tie",
+    "bow tie",
+    "necktie",
+    "cravat",
+    "sari",
+    "lehenga",
+    "churidar",
+    "salwar kameez",
+    "sherwani",
+    "kilt",
+    "toga",
+    "cheongsam",
+    "qipao",
+    "hanbok",
+    "dashiki",
+    "kaftan",
+    "yukata",
+    "hakama",
+    "dirndl",
+    "lederhosen",
+    "bikeshorts",
+    "fishing vest",
+    "flak jacket",
+    "flight suit",
+    "wetsuit",
+    "dry suit",
+    "base layer",
+    "compression shorts",
+    "compression shirt",
+    "rash guard",
+    "ski jacket",
+    "ski pants",
+    "snowboard pants",
+    "snowsuit",
+    "thermal underwear",
+    "track suit",
+    "training pants",
+    "trench coat",
+    "waders",
+    "wetsuit",
+    "workout leggings",
+    "yoga pants",
+    "zoot suit",
+    "band t-shirt",
+    "graphic tee",
+    "linen shirt",
+    "silk blouse",
+    "velvet blazer",
+    "wool sweater",
+    "mesh top",
+    "sequin dress",
+    "glitter top",
+    "faux fur vest",
+    "neoprene swimsuit",
+    "spandex leggings",
+    "vinyl jacket",
 ]
 
 
@@ -318,91 +710,265 @@ class TextEmbeddings:
         return inputs.input_ids
 
 
-class CollateFn:
-    def __init__(self, proportion_patchworks=0.0, proportion_patchworks_images=0.0):
+class Augmentations:
+    def __init__(
+        self,
+        empty_prompt,
+        proportion_empty_prompts=0.0,
+        proportion_empty_images=0.0,
+        proportion_patchworked_images=0.0,
+        proportion_cutout_images=0.0,
+        proportion_patchworks=0.0,
+    ):
+        self.proportions = [
+            proportion_empty_prompts,
+            proportion_empty_prompts + proportion_empty_images,
+            proportion_empty_prompts
+            + proportion_empty_images
+            + proportion_patchworked_images,
+            proportion_empty_prompts
+            + proportion_empty_images
+            + proportion_patchworked_images
+            + proportion_cutout_images,
+        ]
+        # self.empty_prompt = empty_prompt
         self.proportion_patchworks = proportion_patchworks
-        self.proportion_patchworks_images = proportion_patchworks_images
+        self.empty_prompt = empty_prompt
+
+    def __call__(self, examples):
+        # examples is an list of dictionaries
+        for i, ex in enumerate(examples):
+            original = ex["original"]
+            agnostic = ex["agnostic"]
+            head = ex["head"]
+            mask = ex["mask"]
+            original_openpose = ex["original_openpose"]
+            target = ex["target"]
+            clothes = ex["clothes"]
+            clothes_openpose = ex["clothes_openpose"]
+            target2 = ex["target2"]
+            clothes2 = ex["clothes2"]
+            clothes_openpose2 = ex["clothes_openpose2"]
+            input_ids = ex["input_ids"]
+
+            if random.random() < self.proportions[0]:
+                # Empty prompt
+                input_ids = self.empty_prompt
+            elif random.random() < self.proportions[1]:
+                if random.random() < 0.5:
+                    # Empty images
+                    agnostic = Image.new("RGB", (RESOLUTION, RESOLUTION), BG_COLOR)
+                    head = Image.new("RGB", (RESOLUTION, RESOLUTION), BG_COLOR)
+                else:
+                    if random.random() < 0.5:
+                        clothes = Image.new("RGB", (RESOLUTION, RESOLUTION), BG_COLOR)
+                    else:
+                        clothes2 = Image.new("RGB", (RESOLUTION, RESOLUTION), BG_COLOR)
+            elif random.random() < self.proportions[2]:
+                # Patchworked images
+                patched_transform = PatchedTransform(
+                    RESOLUTION_PATCH, self.proportion_patchworks, BG_COLOR
+                )
+                # chose one of three
+                if random.random() < 0.3333:
+                    agnostic = patched_transform(agnostic)
+                    head = patched_transform(head)
+                elif random.random() < 0.6666:
+                    clothes = patched_transform(clothes)
+                else:
+                    clothes2 = patched_transform(clothes2)
+            elif random.random() < self.proportions[3]:
+                # Cutout images
+                if random.random() < 0.333:
+                    center_x, center_y = self.find_center(original_openpose)
+                    agnostic = self.remove_half_image(agnostic, center_x, center_y)
+                    head = self.remove_half_image(head, center_x, center_y)
+                elif random.random() < 0.666:
+                    center_x, center_y = self.find_center(clothes_openpose)
+                    clothes = self.remove_half_image(clothes, center_x, center_y)
+                else:
+                    center_x, center_y = self.find_center(clothes_openpose2)
+                    clothes2 = self.remove_half_image(clothes2, center_x, center_y)
+
+            examples[i] = {
+                "original": original,
+                "agnostic": agnostic,
+                "head": head,
+                "mask": mask,
+                "original_openpose": original_openpose,
+                "clothes": clothes,
+                "clothes_openpose": clothes_openpose,
+                "target": target,
+                "clothes2": clothes2,
+                "clothes_openpose2": clothes_openpose2,
+                "target2": target2,
+                "input_ids": input_ids,
+            }
+
+        return examples
+
+    def find_center(self, openpose_image: Image.Image):
+        """
+        Finds the center of non-zero pixels in an image.
+
+        Parameters:
+        - openpose_image: A PIL Image object.
+
+        Returns:
+        - A tuple (center_x, center_y) representing the center of the non-zero pixels in the image.
+        """
+        # Convert the image to a numpy array
+        img_array = np.array(openpose_image)
+
+        # Check if the image is grayscale or RGB by examining the shape of the array
+        if len(img_array.shape) == 3:
+            # If RGB, convert nonzero to True/False, considering a pixel "zero" if all its channels are 0
+            non_zero_pixels = np.any(img_array != 0, axis=-1)
+        else:
+            # If grayscale, directly check for nonzero pixels
+            non_zero_pixels = img_array != 0
+
+        # Find indices of non-zero pixels
+        non_zero_indices = np.argwhere(non_zero_pixels)
+
+        # Calculate the mean of the indices to find the center
+        center = non_zero_indices.mean(axis=0)
+
+        # Return the center as (x, y), note that numpy's array gives row (y) then column (x)
+        return center[::-1]
+
+    def remove_half_image(self, image, center_x, center_y, color=BG_COLOR):
+        """
+        Removes half of the image by coloring it with the given color based on a random angle line
+        passing through (center_x, center_y).
+
+        Parameters:
+        - image: PIL Image object.
+        - center_x, center_y: Coordinates of the center point.
+        - color: The color to use for removing half of the image. Default is black.
+
+        Returns:
+        - A new PIL Image object with half of the original image colored.
+        """
+        # Make a copy of the image to avoid modifying the original
+        img_copy = image.copy()
+        draw = ImageDraw.Draw(img_copy)
+
+        # Image dimensions
+        width, height = img_copy.size
+
+        # Choose a random angle between 0 and 360 degrees
+        angle = random.uniform(0, 360)
+        angle_rad = math.radians(angle)
+
+        # Calculate the slope (m) and intercept (b) of the line
+        if angle != 90 and angle != 270:
+            m = math.tan(angle_rad)
+            b = center_y - (m * center_x)
+
+            # Function to determine if a point is below or above the line
+            def is_above_line(x, y):
+                # Calculate y value on the line for x
+                y_on_line = m * x + b
+                return y > y_on_line
+
+        # For vertical lines, where angle is 90 or 270 degrees
+        else:
+
+            def is_above_line(x, y):
+                return x > center_x if angle == 90 else x < center_x
+
+        # Determine which side to color
+        side_to_color = is_above_line(0, 0)  # Using the origin as a reference
+
+        # Iterate over all pixels
+        for x in range(width):
+            for y in range(height):
+                if is_above_line(x, y) == side_to_color:
+                    draw.point((x, y), fill=color)
+
+        return img_copy
+
+
+class CollateFn:
+    def __init__(
+        self,
+        empty_prompt,
+        proportion_empty_prompts=0.0,
+        proportion_empty_images=0.0,
+        proportion_patchworked_images=0.0,
+        proportion_cutout_images=0.0,
+        proportion_patchworks=0.0,
+        uses_vae=False,
+    ):
+        self.augmentations = Augmentations(
+            empty_prompt=empty_prompt,
+            proportion_empty_prompts=proportion_empty_prompts,
+            proportion_empty_images=proportion_empty_images,
+            proportion_patchworked_images=proportion_patchworked_images,
+            proportion_cutout_images=proportion_cutout_images,
+            proportion_patchworks=proportion_patchworks,
+        )
+        self.paired_transform = PairedTransform(
+            RESOLUTION, (BG_COLOR, BG_COLOR, BG_COLOR_CONTROLNET)
+        )
+        self.uses_vae = uses_vae
 
     def __call__(self, examples):
         # Initialize the transforms
-        paired_transform = PairedTransform(
-            RESOLUTION, (BG_COLOR, BG_COLOR, BG_COLOR_CONTROLNET)
-        )
-        patched_transform = PatchedTransform(
-            RESOLUTION_PATCH, self.proportion_patchworks, BG_COLOR
-        )
+        examples = self.augmentations(examples)
 
         # Apply the paired transform and collect the data
         paired_data = [
-            paired_transform([ex["target"], ex["clothes"], ex["clothes_openpose"]])
+            self.paired_transform([ex["target"], ex["clothes"], ex["clothes_openpose"]])
             for ex in examples
         ]
         target_transformed, clothes_transformed, clothes_openpose_transformed = zip(
             *paired_data
         )
 
-        # Apply patched transform to various image types
-        patched_original = [
-            (
-                patched_transform(ex["original"])
-                if random.random() < self.proportion_patchworks_images
-                else ex["original"]
+        # Apply the paired transform and collect the data
+        paired_data2 = [
+            self.paired_transform(
+                [ex["target2"], ex["clothes2"], ex["clothes_openpose2"]]
             )
             for ex in examples
         ]
-        # patched_original = [ex["original"] for ex in examples]
-        patched_agnostic = [
-            (
-                patched_transform(ex["agnostic"])
-                if random.random() < self.proportion_patchworks_images
-                else ex["agnostic"]
-            )
-            for ex in examples
-        ]
-        patched_clothes = [
-            (
-                patched_transform(image)
-                if random.random() < self.proportion_patchworks_images
-                else image
-            )
-            for image in clothes_transformed
-        ]
+        target_transformed2, clothes_transformed2, clothes_openpose_transformed2 = zip(
+            *paired_data2
+        )
 
-        # Reassemble the examples with the transformed images
-        transformed_examples = [
-            {
-                "original": po,
-                "agnostic": pa,
-                "mask": ex["mask"],
-                "original_openpose": ex["original_openpose"],
-                "target": tt,
-                "clothes": pc,
-                "clothes_openpose": co,
-                "input_ids": ex["input_ids"],
-            }
-            for po, pa, tt, pc, co, ex in zip(
-                patched_original,
-                patched_agnostic,
-                target_transformed,
-                patched_clothes,
-                clothes_openpose_transformed,
-                examples,
-            )
-        ]
+        for i, ex in enumerate(examples):
+            ex["target"] = target_transformed[i]
+            ex["clothes"] = clothes_transformed[i]
+            ex["clothes_openpose"] = clothes_openpose_transformed[i]
+            ex["target2"] = target_transformed2[i]
+            ex["clothes2"] = clothes_transformed2[i]
+            ex["clothes_openpose2"] = clothes_openpose_transformed2[i]
 
         # Create tensors for each image type and apply the appropriate transforms
         tensor_fields = {
             "original": IMAGES_TRANSFORMS,
-            "agnostic": IMAGES_TRANSFORMS,
+            "agnostic": (
+                IMAGES_TRANSFORMS if self.uses_vae else CONDITIONING_IMAGES_TRANSFORMS
+            ),
+            "head": (
+                IMAGES_TRANSFORMS if self.uses_vae else CONDITIONING_IMAGES_TRANSFORMS
+            ),
             "original_openpose": CONDITIONING_IMAGES_TRANSFORMS,
-            "clothes": IMAGES_TRANSFORMS,
+            "clothes": (
+                IMAGES_TRANSFORMS if self.uses_vae else CONDITIONING_IMAGES_TRANSFORMS
+            ),
             "clothes_openpose": CONDITIONING_IMAGES_TRANSFORMS,
             "target": IMAGES_TRANSFORMS,
+            "clothes2": (
+                IMAGES_TRANSFORMS if self.uses_vae else CONDITIONING_IMAGES_TRANSFORMS
+            ),
+            "clothes_openpose2": CONDITIONING_IMAGES_TRANSFORMS,
+            "target2": IMAGES_TRANSFORMS,
         }
         tensors = {
-            field: self._stack_and_format(
-                [ex[field] for ex in transformed_examples], transform
-            )
+            field: self._stack_and_format([ex[field] for ex in examples], transform)
             for field, transform in tensor_fields.items()
         }
         tensors["input_ids"] = torch.stack(
@@ -417,21 +983,21 @@ class CollateFn:
 
 
 if __name__ == "__main__":
-    model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
-    processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+    from dataset_local import edgestyle_dataset_test
 
-    best_embeddings = BestEmbeddings(model, processor)
+    example = edgestyle_dataset_test[0:2]
 
-    best = best_embeddings(
-        [
-            Image.open("temp/test_data/original_clothes.jpg"),
-            Image.open("temp/test_data/target_clothes.jpg"),
-            Image.open("temp/test_data/original_clothes.jpg"),
-            Image.open("temp/test_data/target_clothes.jpg"),
-        ]
-    )
+    # example is a dictionary of lists, transform it to a list of dictionaries
+    example = [dict(zip(example.keys(), values)) for values in zip(*example.values())]
 
-    input_ids = TextEmbeddings(processor.tokenizer)(best)
-    prompts = InverseEmbeddings(processor.tokenizer)(input_ids)
+    augmenations = Augmentations(empty_prompt=None, proportion_cutout_images=1.0)
+    # augmenations = Augmentations(
+    #     empty_prompt=None, proportion_patchworked_images=1.0, proportion_patchworks=0.1
+    # )
+    example = augmenations(example)
 
-    print(prompts)
+    # save images
+    for i, ex in enumerate(example):
+        ex["agnostic"].save(f"./temp/agnostic_{i}.png")
+        ex["clothes"].save(f"./temp/clothes_{i}.png")
+        ex["clothes2"].save(f"./temp/clothes2_{i}.png")

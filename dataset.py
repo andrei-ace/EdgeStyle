@@ -31,6 +31,10 @@ def process_dataset_back_to_images(examples):
         for binary_data in examples["agnostic"]
     ]
 
+    head = [
+        Image.open(io.BytesIO(binary_data["bytes"])) for binary_data in examples["head"]
+    ]
+
     original_openpose = [
         Image.open(io.BytesIO(binary_data["bytes"]))
         for binary_data in examples["original_openpose"]
@@ -57,6 +61,7 @@ def process_dataset_back_to_images(examples):
 
     examples["original"] = original
     examples["agnostic"] = agnostic
+    examples["head"] = head
     examples["original_openpose"] = original_openpose
     examples["clothes"] = clothes
     examples["clothes_openpose"] = clothes_openpose

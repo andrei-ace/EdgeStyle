@@ -2,7 +2,6 @@ import os
 import io
 from itertools import permutations
 import pandas as pd
-import numpy as np
 
 import datasets
 from datasets import Dataset
@@ -30,7 +29,7 @@ data_dirs = os.listdir(IMAGES_PATH)
 data_dirs = [
     os.path.join(IMAGES_PATH, data_dir)
     for data_dir in data_dirs
-    if os.path.isdir(os.path.join(IMAGES_PATH, data_dir))
+    if os.path.isdir(os.path.join(IMAGES_PATH, data_dir)) and "_skip_" not in data_dir
 ]
 # sort directories by name
 data_dirs = sorted(data_dirs)
@@ -41,8 +40,6 @@ BATCH_SIZE = 64
 MAX_SCORE = 0.90
 MIN_SCORE = 0.80
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 tokenizer = AutoTokenizer.from_pretrained(
     "runwayml/stable-diffusion-v1-5",
     subfolder="tokenizer",
@@ -50,15 +47,11 @@ tokenizer = AutoTokenizer.from_pretrained(
 )
 
 image_processor = AutoImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
-model = CLIPVisionModelWithProjection.from_pretrained(
-    "openai/clip-vit-large-patch14"
-).to(DEVICE)
+model = CLIPVisionModelWithProjection.from_pretrained("openai/clip-vit-large-patch14")
 
-
-model_prompt_finder = CLIPModel.from_pretrained("openai/clip-vit-large-patch14").to(
-    DEVICE
-)
+model_prompt_finder = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
 processor_prompt_finder = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+
 best_embeddings = BestEmbeddings(model_prompt_finder, processor_prompt_finder)
 
 
@@ -86,6 +79,11 @@ def preprocess_train(examples):
         for image in examples["agnostic"]
     ]
 
+    head = [
+        Image.open(image).convert("RGB").resize((RESOLUTION, RESOLUTION))
+        for image in examples["head"]
+    ]
+
     original_openpose = [
         Image.open(image).convert("RGB").resize((RESOLUTION, RESOLUTION))
         for image in examples["original_openpose"]
@@ -96,9 +94,19 @@ def preprocess_train(examples):
         for image in examples["clothes"]
     ]
 
+    clothes2 = [
+        Image.open(image).convert("RGB").resize((RESOLUTION, RESOLUTION))
+        for image in examples["clothes2"]
+    ]
+
     clothes_openpose = [
         Image.open(image).convert("RGB").resize((RESOLUTION, RESOLUTION))
         for image in examples["clothes_openpose"]
+    ]
+
+    clothes_openpose2 = [
+        Image.open(image).convert("RGB").resize((RESOLUTION, RESOLUTION))
+        for image in examples["clothes_openpose2"]
     ]
 
     mask = [
@@ -111,29 +119,46 @@ def preprocess_train(examples):
         for image in examples["target"]
     ]
 
+    target2 = [
+        Image.open(image).convert("RGB").resize((RESOLUTION, RESOLUTION))
+        for image in examples["target2"]
+    ]
+
     examples["original"] = original
     examples["agnostic"] = agnostic
+    examples["head"] = head
     examples["original_openpose"] = original_openpose
     examples["clothes"] = clothes
+    examples["clothes2"] = clothes2
     examples["clothes_openpose"] = clothes_openpose
+    examples["clothes_openpose2"] = clothes_openpose2
     examples["mask"] = mask
     examples["target"] = target
+    examples["target2"] = target2
     examples["input_ids"] = tokenize_captions(clothes)
 
     return examples
 
 
 @torch.inference_mode()
-def compute_scores_vectors(emb_one, emb_two):
-    """Computes cosine similarity between two vectors."""
-    scores = torch.nn.functional.cosine_similarity(emb_one, emb_two, dim=1)
+def compute_scores_vectors(emb_one, emb_two, emb_three):
+    """Computes cosine similarity between vectors."""
+    score1 = torch.nn.functional.cosine_similarity(emb_one, emb_two, dim=1)
+    score2 = torch.nn.functional.cosine_similarity(emb_one, emb_three, dim=1)
+    score3 = torch.nn.functional.cosine_similarity(emb_two, emb_three, dim=1)
+    scores = (score1 + score2 + score3) / 3
     return scores
 
 
 @torch.inference_mode()
-def compute_scores(pd_image1: pd.Series, pd_image2: pd.Series) -> pd.Series:
+def compute_scores(
+    pd_image1: pd.Series, pd_image2: pd.Series, pd_image3: pd.Series
+) -> pd.Series:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     images1 = pd_image1.values
     images2 = pd_image2.values
+    images3 = pd_image3.values
 
     torch_data_1 = torch.stack(
         [
@@ -142,7 +167,7 @@ def compute_scores(pd_image1: pd.Series, pd_image2: pd.Series) -> pd.Series:
             ).pixel_values.squeeze()
             for image in images1
         ]
-    ).to(DEVICE)
+    ).to(device)
 
     torch_data_2 = torch.stack(
         [
@@ -151,15 +176,26 @@ def compute_scores(pd_image1: pd.Series, pd_image2: pd.Series) -> pd.Series:
             ).pixel_values.squeeze()
             for image in images2
         ]
-    ).to(DEVICE)
+    ).to(device)
+
+    torch_data_3 = torch.stack(
+        [
+            image_processor(
+                Image.open(image), return_tensors="pt"
+            ).pixel_values.squeeze()
+            for image in images3
+        ]
+    ).to(device)
 
     emb1 = model(torch_data_1).image_embeds
     emb2 = model(torch_data_2).image_embeds
+    emb3 = model(torch_data_3).image_embeds
 
     emb1 = torch.flatten(emb1, start_dim=1)
     emb2 = torch.flatten(emb2, start_dim=1)
+    emb3 = torch.flatten(emb3, start_dim=1)
 
-    scores = compute_scores_vectors(emb1, emb2)
+    scores = compute_scores_vectors(emb1, emb2, emb3)
 
     return pd.Series(scores.cpu().numpy(), index=pd_image1.index)
 
@@ -173,6 +209,10 @@ def process_dataset_back_to_images(examples):
     agnostic = [
         Image.open(io.BytesIO(binary_data["bytes"]))
         for binary_data in examples["agnostic"]
+    ]
+
+    head = [
+        Image.open(io.BytesIO(binary_data["bytes"])) for binary_data in examples["head"]
     ]
 
     original_openpose = [
@@ -190,6 +230,16 @@ def process_dataset_back_to_images(examples):
         for binary_data in examples["clothes_openpose"]
     ]
 
+    clothes2 = [
+        Image.open(io.BytesIO(binary_data["bytes"]))
+        for binary_data in examples["clothes2"]
+    ]
+
+    clothes_openpose2 = [
+        Image.open(io.BytesIO(binary_data["bytes"]))
+        for binary_data in examples["clothes_openpose2"]
+    ]
+
     mask = [
         Image.open(io.BytesIO(binary_data["bytes"])) for binary_data in examples["mask"]
     ]
@@ -198,20 +248,33 @@ def process_dataset_back_to_images(examples):
         Image.open(io.BytesIO(binary_data["bytes"]))
         for binary_data in examples["target"]
     ]
+    target2 = [
+        Image.open(io.BytesIO(binary_data["bytes"]))
+        for binary_data in examples["target2"]
+    ]
 
     examples["original"] = original
     examples["agnostic"] = agnostic
+    examples["head"] = head
     examples["original_openpose"] = original_openpose
     examples["clothes"] = clothes
+    examples["clothes2"] = clothes2
     examples["clothes_openpose"] = clothes_openpose
+    examples["clothes_openpose2"] = clothes_openpose2
     examples["mask"] = mask
     examples["target"] = target
+    examples["target2"] = target2
 
     return examples
 
 
 # if DATASET_PATH exists, then load the dataset from DATASET_PATH
 if not os.path.exists(DATASET_PATH):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model.to(device)
+    model_prompt_finder.to(device)
+
     df_final = pd.DataFrame()
     # read each jpeg image file in the directory into a pandas dataframe
     for data_dir in tqdm(data_dirs):
@@ -221,17 +284,25 @@ if not os.path.exists(DATASET_PATH):
             if filename.endswith(".jpg")
         ]
 
-        if len(filenames) < 2:
-            print(f"Skipping {data_dir} because it has less than 2 images")
+        if len(filenames) < 3:
+            print(f"Skipping {data_dir} because it has less than 3 images")
             continue
 
-        df = pd.DataFrame(permutations(filenames, 2), columns=["original", "clothes"])
+        df = pd.DataFrame(
+            permutations(filenames, 3), columns=["original", "clothes", "clothes2"]
+        )
+
+        if df.shape[0] > BATCH_SIZE * 2:
+            df = df.sample(n=BATCH_SIZE * 2, replace=True, ignore_index=True)
 
         df = df.assign(agnostic=df["original"])
+        df = df.assign(head=df["original"])
         df = df.assign(mask=df["original"])
         df = df.assign(original_openpose=df["original"])
         df = df.assign(clothes_openpose=df["clothes"])
+        df = df.assign(clothes_openpose2=df["clothes2"])
         df = df.assign(target=df["clothes"])
+        df = df.assign(target2=df["clothes2"])
 
         df["original"] = df["original"].apply(
             lambda x: os.path.join(data_dir, "subject", x)
@@ -239,7 +310,13 @@ if not os.path.exists(DATASET_PATH):
         df["target"] = df["target"].apply(
             lambda x: os.path.join(data_dir, "subject", x)
         )
+        df["target2"] = df["target2"].apply(
+            lambda x: os.path.join(data_dir, "subject", x)
+        )
         df["clothes"] = df["clothes"].apply(
+            lambda x: os.path.join(data_dir, "clothes", x)
+        )
+        df["clothes2"] = df["clothes2"].apply(
             lambda x: os.path.join(data_dir, "clothes", x)
         )
         df["original_openpose"] = df["original_openpose"].apply(
@@ -248,7 +325,11 @@ if not os.path.exists(DATASET_PATH):
         df["agnostic"] = df["agnostic"].apply(
             lambda x: os.path.join(data_dir, "agnostic", x)
         )
+        df["head"] = df["head"].apply(lambda x: os.path.join(data_dir, "head", x))
         df["clothes_openpose"] = df["clothes_openpose"].apply(
+            lambda x: os.path.join(data_dir, "openpose", x)
+        )
+        df["clothes_openpose2"] = df["clothes_openpose2"].apply(
             lambda x: os.path.join(data_dir, "openpose", x)
         )
 
@@ -263,7 +344,9 @@ if not os.path.exists(DATASET_PATH):
         for i in range(0, len(df), BATCH_SIZE):
             batch = df.iloc[i : i + BATCH_SIZE]
             # compute similarity score for each batch
-            batch_scores = compute_scores(batch["original"], batch["target"])
+            batch_scores = compute_scores(
+                batch["original"], batch["target"], batch["target2"]
+            )
             # remove rows where scores are over or under a threshold
 
             index_to_drop += batch_scores[
@@ -277,7 +360,7 @@ if not os.path.exists(DATASET_PATH):
 
         if df.shape[0] > MAX_FRAMES:
             # keep only MAX_FRAMES rows
-            df = df.sample(n=MAX_FRAMES, random_state=42)
+            df = df.sample(n=MAX_FRAMES, random_state=42, replace=True)
 
         df_final = pd.concat([df_final, df], ignore_index=True)
 

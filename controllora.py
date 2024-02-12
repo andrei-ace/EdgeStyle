@@ -7,7 +7,7 @@ from torch.nn import functional as F
 
 from diffusers.configuration_utils import register_to_config
 from diffusers.utils import logging
-from diffusers.models.unet_2d_condition import UNet2DConditionModel
+from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel
 from diffusers.models.controlnet import (
     ControlNetModel,
     ControlNetConditioningEmbedding,
@@ -268,10 +268,8 @@ class ControlLoRAModel(ControlNetModel):
 
                 # TODO: how to correct set lora layers instead of hack it (it will be set to None when enable xformer without this hack)
                 original_setter = attn_processor.set_lora_layer
-                attn_processor.set_lora_layer = (
-                    lambda lora_layer: None
-                    if lora_layer is None
-                    else original_setter(lora_layer)
+                attn_processor.set_lora_layer = lambda lora_layer: (
+                    None if lora_layer is None else original_setter(lora_layer)
                 )
 
                 attn_processor.set_lora_layer(lora_layer)

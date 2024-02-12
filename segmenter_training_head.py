@@ -36,8 +36,8 @@ from efficientvit.models.efficientvit.sam import (
 # torch.set_float32_matmul_precision("high")
 
 WEIGHT_URL = "efficientvit/assets/checkpoints/sam/l2.pt"
-MASK_WEIGHT_URL = "efficientvit/assets/checkpoints/sam/mask_decoder_subject.pt"
-TRAINED_WEIGHT_URL = "efficientvit/assets/checkpoints/sam/trained_model_subject.pt"
+MASK_WEIGHT_URL = "efficientvit/assets/checkpoints/sam/mask_decoder_subject_head.pt"
+TRAINED_WEIGHT_URL = "efficientvit/assets/checkpoints/sam/trained_model_head.pt"
 ORIGINAL_SIZE = (600, 400)
 
 # background     0
@@ -59,7 +59,7 @@ ORIGINAL_SIZE = (600, 400)
 # bag            16
 # scarf          17
 
-KEEP_CATEGORIES = range(1, 18)  # all categories except background
+KEEP_CATEGORIES = [1, 2, 3, 11]
 
 
 def resize(example: dict, height: int, width: int) -> dict:
@@ -449,7 +449,7 @@ def main() -> None:
         overfit_batches=0,
         fast_dev_run=False,
         callbacks=[model_checkpoint_callback],
-        default_root_dir="./models/sam_subject",
+        default_root_dir="./models/sam_head",
     )
     trainer.fit(model, train_loader, val_loader)
 

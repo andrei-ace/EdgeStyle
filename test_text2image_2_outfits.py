@@ -22,14 +22,9 @@ from controllora import ControlLoRAModel
 from utils import BestEmbeddings
 
 
-# CONTROLNET_DIR = "./models/output_text2image_prodigy_vae_experiment"
-# MODEL_NAME = "runwayml/stable-diffusion-v1-5"
-# MODEL_NAME = "SG161222/Realistic_Vision_V3.0_VAE"
-# NEGATIVE_PROMPT = "disfigured, ugly, bad, immature, cartoon, anime, 3d, painting, b&w"
-
 RESOLUTION = 512
 
-NUM_IMAGES = 4
+NUM_IMAGES = 6
 
 IMAGES_TRANSFORMS = transforms.Compose(
     [
@@ -146,6 +141,20 @@ def parse_args(input_args=None):
         help="Name of the target image.",
     )
     parser.add_argument(
+        "--target_path2",
+        type=str,
+        default=None,
+        required=True,
+        help="Path to second target image.",
+    )
+    parser.add_argument(
+        "--target_image_name2",
+        type=str,
+        default=None,
+        required=True,
+        help="Name of the second target image.",
+    )
+    parser.add_argument(
         "--result_path",
         type=str,
         default=None,
@@ -167,6 +176,12 @@ def parse_args(input_args=None):
             "Feed agnostic images into the controlnet as input. In the absence of this setting, "
             "the controlnet defaults to utilizing images that exclusively feature the subject's head."
         ),
+    )
+    parser.add_argument(
+        "--controllora_use_vae",
+        action="store_true",
+        default=False,
+        help=("Whether to use the VAE in the controlnet."),
     )
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -195,6 +210,7 @@ def main(args):
             args.pretrained_model_name_or_path,
             subfolder="vae",
         )
+    vae.to(device, dtype=torch.float32)  # vae should always be in fp32
     unet = UNet2DConditionModel.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="unet",
@@ -205,7 +221,7 @@ def main(args):
             ControlLoRAModel.from_pretrained(
                 args.controlnet_model_name_or_path,
                 subfolder="controlnet-0",
-                vae=vae,
+                vae=vae if args.controllora_use_vae else None,
             ),
             ControlLoRAModel.from_pretrained(
                 args.controlnet_model_name_or_path,
@@ -214,11 +230,20 @@ def main(args):
             ControlLoRAModel.from_pretrained(
                 args.controlnet_model_name_or_path,
                 subfolder="controlnet-2",
-                vae=vae,
+                vae=vae if args.controllora_use_vae else None,
             ),
             ControlLoRAModel.from_pretrained(
                 args.controlnet_model_name_or_path,
                 subfolder="controlnet-3",
+            ),
+            ControlLoRAModel.from_pretrained(
+                args.controlnet_model_name_or_path,
+                subfolder="controlnet-4",
+                vae=vae if args.controllora_use_vae else None,
+            ),
+            ControlLoRAModel.from_pretrained(
+                args.controlnet_model_name_or_path,
+                subfolder="controlnet-5",
             ),
         ]
     )
@@ -249,6 +274,9 @@ def main(args):
     target = Image.open(
         os.path.join(args.target_path, "subject", args.target_image_name)
     )
+    target2 = Image.open(
+        os.path.join(args.target_path2, "subject", args.target_image_name2)
+    )
 
     agnostic = Image.open(
         os.path.join(args.source_path, "agnostic", args.source_image_name)
@@ -270,13 +298,22 @@ def main(args):
         os.path.join(args.target_path, "openpose", args.target_image_name)
     )
 
+    clothes2 = Image.open(
+        os.path.join(args.target_path2, "clothes", args.target_image_name2)
+    )
+
+    clothes_openpose2 = Image.open(
+        os.path.join(args.target_path2, "openpose", args.target_image_name2)
+    )
+
     prompts = best_embeddings([clothes])
 
-    guidance_scales = np.linspace(2.0, 5.0, NUM_IMAGES)
+    guidance_scales = np.linspace(1.0, 7.5, NUM_IMAGES)
 
     images = [
         subject,
         target,
+        target2,
     ]
 
     for i in range(NUM_IMAGES):
@@ -289,10 +326,26 @@ def main(args):
                 guidance_scale=guidance_scales[i],
                 # guess_mode=True,
                 image=[
-                    IMAGES_TRANSFORMS(agnostic_or_head).unsqueeze(0),
+                    (
+                        IMAGES_TRANSFORMS(agnostic_or_head).unsqueeze(0)
+                        if args.controllora_use_vae
+                        else CONDITIONING_IMAGES_TRANSFORMS(agnostic_or_head).unsqueeze(
+                            0
+                        )
+                    ),
                     CONDITIONING_IMAGES_TRANSFORMS(original_openpose).unsqueeze(0),
-                    IMAGES_TRANSFORMS(clothes).unsqueeze(0),
+                    (
+                        IMAGES_TRANSFORMS(clothes).unsqueeze(0)
+                        if args.controllora_use_vae
+                        else CONDITIONING_IMAGES_TRANSFORMS(clothes).unsqueeze(0)
+                    ),
                     CONDITIONING_IMAGES_TRANSFORMS(clothes_openpose).unsqueeze(0),
+                    (
+                        IMAGES_TRANSFORMS(clothes2).unsqueeze(0)
+                        if args.controllora_use_vae
+                        else CONDITIONING_IMAGES_TRANSFORMS(clothes2).unsqueeze(0)
+                    ),
+                    CONDITIONING_IMAGES_TRANSFORMS(clothes_openpose2).unsqueeze(0),
                 ],
                 # controlnet_conditioning_scale=[0.5, 0.5, 1, 1],
                 # control_guidance_start=0.0,
@@ -304,7 +357,7 @@ def main(args):
         image = add_text_to_image(image, f"Guidance scale: {guidance_scales[i]:.2f}")
         images.append(image)
 
-    image = image_grid(images, 2, len(images) // 2)
+    image = image_grid(images, 3, len(images) // 3)
 
     image.save(os.path.join(args.result_path, args.image_result_name))
 

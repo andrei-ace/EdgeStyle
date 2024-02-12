@@ -1,22 +1,31 @@
 accelerate launch train_text2image_vaecontrolnet.py \
- --pretrained_model_name_or_path="runwayml/stable-diffusion-v1-5" \
- --output_dir="models/output_text2image_prodigy_vae" \
- --resolution=512 \
- --train_batch_size=2 \
- --gradient_accumulation_steps 2 \
- --mixed_precision fp16 \
- --seed=42 \
- --resume_from_checkpoint latest \
- --num_validation_images 4 \
- --checkpoints_total_limit 3 \
- --optimizer="prodigy" \
- --learning_rate=1.0 \
- --prodigy_safeguard_warmup=True \
- --prodigy_use_bias_correction=True \
- --adam_beta1=0.9 \
- --adam_beta2=0.99 \
- --adam_weight_decay=0.01 \
- --snr_gamma=5.0 \
- --validation_steps 2500 \
- --checkpointing_steps 5000 \
- --max_train_steps=80000
+--pretrained_model_name_or_path="SG161222/Realistic_Vision_V5.1_noVAE" \
+--pretrained_vae_name_or_path="stabilityai/sd-vae-ft-mse" \
+--output_dir="models/output_text2image_vaecontrolnet" \
+--resolution=512 \
+--train_batch_size=2 \
+--gradient_accumulation_steps 32 \
+--mixed_precision fp16 \
+--seed=42 \
+--resume_from_checkpoint latest \
+--num_validation_images 4 \
+--checkpoints_total_limit 3 \
+--dataloader_num_workers 4 \
+--optimizer="prodigy" \
+--learning_rate=1.0 \
+--prodigy_safeguard_warmup=True \
+--prodigy_use_bias_correction=True \
+--adam_beta1=0.9 \
+--adam_beta2=0.99 \
+--adam_weight_decay=0.01 \
+--snr_gamma=5.0 \
+--proportion_empty_prompts=0.15 \
+--proportion_empty_images=0.0 \
+--proportion_patchworked_images=0.15 \
+--proportion_cutout_images=0.2 \
+--proportion_patchworks=0.1 \
+--validation_steps 100 \
+--checkpointing_steps 250 \
+--max_train_steps=7000
+
+# --lr_scheduler "cosine_annealing" \

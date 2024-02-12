@@ -3,6 +3,7 @@
 __pycache__/
 .mypy_cache/
 data/
+data_backup/
 *.pt
 *.pth
 models/
