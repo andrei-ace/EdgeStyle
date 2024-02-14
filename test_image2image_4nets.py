@@ -14,9 +14,9 @@ from transformers import AutoTokenizer, CLIPTextModel, CLIPModel, CLIPProcessor
 
 
 from diffusers.pipelines.controlnet.multicontrolnet import MultiControlNetModel
-from controllora import ControlLoRAModel
+from model.controllora import ControlLoRAModel
 
-from utils import BestEmbeddings
+from model.utils import BestEmbeddings
 
 from PIL import Image
 

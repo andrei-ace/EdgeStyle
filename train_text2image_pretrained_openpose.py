@@ -43,19 +43,19 @@ from diffusers import (
     StableDiffusionControlNetPipeline,
     UNet2DConditionModel,
     UniPCMultistepScheduler,
-    ControlNetModel
+    ControlNetModel,
 )
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version
 
-from diffusers.pipelines.controlnet.multicontrolnet import MultiControlNetModel
-from controllora import ControlLoRAModel
+from model.controllora import ControlLoRAModel
 
 from diffusers.training_utils import compute_snr
 
 from dataset_local import edgestyle_dataset, edgestyle_dataset_test
-from utils import CollateFn, CONDITIONING_IMAGES_TRANSFORMS
-from utils import InverseEmbeddings
+from model.utils import CollateFn, CONDITIONING_IMAGES_TRANSFORMS
+from model.utils import InverseEmbeddings
+from model.edgestyle_multicontrolnet import EdgeStyleMultiControlNetModel
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.24.0")
@@ -141,7 +141,7 @@ def log_validation(
         clothes_openpose2,
         prompt,
     ) in zip(
-        original_list,
+        tqdm(original_list),
         agnostic_or_head_list,
         original_openpose_list,
         clothes_list,
@@ -153,7 +153,7 @@ def log_validation(
         images = []
         image_name = f"validation_image_{i}"
         # Generate increasing args.num_validation_images for each validation image
-        guidance_scales = np.linspace(3.5, 7.0, args.num_validation_images)
+        guidance_scales = np.linspace(1.0, 7.0, args.num_validation_images)
 
         for _ in range(args.num_validation_images):
             with torch.autocast("cuda"):
@@ -170,7 +170,7 @@ def log_validation(
                     ],
                     # guess_mode=True,
                     negative_prompt=NEGATIVE_PROMPT,
-                    num_inference_steps=50,
+                    num_inference_steps=25,
                     generator=generator,
                 ).images[0]
 
@@ -747,36 +747,19 @@ def main(args):
     openpose.requires_grad_(False)
 
     if args.controlnet_model_name_or_path:
-        controlnet = MultiControlNetModel(
-            [
-                ControlLoRAModel.from_pretrained(
-                    args.controlnet_model_name_or_path,
-                    subfolder="controlnet-0",
-                    vae=vae if args.controllora_use_vae else None,
-                ),
-                openpose,
-                ControlLoRAModel.from_pretrained(
-                    args.controlnet_model_name_or_path,
-                    subfolder="controlnet-1",
-                    vae=vae if args.controllora_use_vae else None,
-                ),
-                openpose,
-                ControlLoRAModel.from_pretrained(
-                    args.controlnet_model_name_or_path,
-                    subfolder="controlnet-2",
-                    vae=vae if args.controllora_use_vae else None,
-                ),
-                openpose,
-            ]
+        controlnet = EdgeStyleMultiControlNetModel.from_pretrained(
+            args.controlnet_model_name_or_path,
+            filler_controlnet=openpose,
+            vae=vae if args.controllora_use_vae else None,
+            controlnet_class=ControlLoRAModel,
+            load_pattern=[True, False, True, False, True, False],
         )
         for net in controlnet.nets:
             if net is not openpose:
-                if net.uses_vae:
-                    net.set_autoencoder(vae)
                 net.tie_weights(unet)
     else:
         logger.info("Initializing controlnet weights from unet")
-        controlnet = MultiControlNetModel(
+        controlnet = EdgeStyleMultiControlNetModel(
             [
                 ControlLoRAModel.from_unet(
                     unet,
@@ -802,6 +785,7 @@ def main(args):
             ]
         )
 
+    controlnet.train()
     for net in controlnet.nets:
         if net is not openpose:
             net.train()
@@ -816,18 +800,11 @@ def main(args):
                 while len(weights) > 0:
                     weights.pop()
                     model = models[i]
-                    j = 0
-                    for net in model.nets:
-                        if net is not openpose:
-                            if net.uses_vae:
-                                net.set_autoencoder(None)
-                            net.save_pretrained(
-                                os.path.join(output_dir, f"controlnet-{j}"),
-                                save_checkpoint=True,
-                            )
-                            if net.uses_vae:
-                                net.set_autoencoder(vae)
-                            j += 1
+                    model.save_pretrained(
+                        output_dir,
+                        save_checkpoint=True,
+                        save_pattern=[True, False, True, False, True, False],
+                    )
                     i -= 1
 
         def load_model_hook(models, input_dir):
@@ -837,17 +814,19 @@ def main(args):
                 model = models.pop()
 
                 j = 0
-                for net in model.nets:
+
+                load_model = EdgeStyleMultiControlNetModel.from_pretrained(
+                    input_dir,
+                    load_pattern=[True, False, True, False, True, False],
+                    filler_controlnet=openpose,
+                    vae=vae if args.controllora_use_vae else None,
+                    controlnet_class=ControlLoRAModel,
+                )
+
+                for net, loaded_net_model in zip(model.nets, load_model.nets):
                     if net is not openpose:
-                        load_model = ControlLoRAModel.from_pretrained(
-                            input_dir,
-                            subfolder=f"controlnet-{j}",
-                            uses_vae=net.uses_vae,
-                        )
-                        if net.uses_vae:
-                            load_model.set_autoencoder(vae)
-                        net.load_state_dict(load_model.state_dict())
-                        del load_model
+                        net.load_state_dict(loaded_net_model.state_dict())
+                        del loaded_net_model
                         j += 1
 
                 for net in model.nets:
@@ -1144,6 +1123,17 @@ def main(args):
                         else:
                             agnostic_or_head[i] = batch["agnostic"][i]
 
+                    # if random.random() < 0.5:
+                    #     conditioning_scale = [1.0] * len(controlnet.nets)
+                    # else:
+                    #     # set zero to the odd index of the conditioning_scale and one to the even index
+                    #     conditioning_scale = [0.0] * len(controlnet.nets)
+                    #     for i in range(len(conditioning_scale)):
+                    #         if i % 2 == 0:
+                    #             conditioning_scale[i] = 1.0
+                    #         else:
+                    #             conditioning_scale[i] = 0.0
+
                     down_block_res_samples, mid_block_res_sample = controlnet(
                         noisy_latents,
                         timesteps,
@@ -1294,12 +1284,10 @@ def main(args):
     if accelerator.is_main_process:
         controlnet = accelerator.unwrap_model(controlnet)
 
-        for j, net in enumerate(controlnet.nets):
-            if net.uses_vae:
-                net.set_autoencoder(None)
-            net.save_pretrained(os.path.join(args.output_dir, f"controlnet-{j}"))
-            if net.uses_vae:
-                net.set_autoencoder(vae)
+        controlnet.save_pretrained(
+            args.output_dir,
+            save_pattern=[True, False, True, False, True, False],
+        )
     accelerator.end_training()
 
 

@@ -15,13 +15,12 @@ from diffusers import (
     ControlNetModel,
 )
 from diffusers.optimization import get_scheduler
-from diffusers.pipelines.controlnet.multicontrolnet import MultiControlNetModel
 from transformers import AutoTokenizer, CLIPTextModel, CLIPModel, CLIPProcessor
 
 # local
-from controllora import ControlLoRAModel
-from utils import BestEmbeddings
-
+from model.controllora import ControlLoRAModel
+from model.utils import BestEmbeddings
+from model.edgestyle_multicontrolnet import EdgeStyleMultiControlNetModel
 
 RESOLUTION = 512
 
@@ -230,7 +229,7 @@ def main(args):
         args.pretrained_openpose_name_or_path, torch_dtype=torch.float16
     )
 
-    controlnet = MultiControlNetModel(
+    controlnet = EdgeStyleMultiControlNetModel(
         [
             ControlLoRAModel.from_pretrained(
                 args.controlnet_model_name_or_path,

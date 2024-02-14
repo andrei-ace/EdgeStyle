@@ -25,8 +25,8 @@ from controlnet_aux.open_pose import draw_poses, resize_image
 from controlnet_aux.util import HWC3
 
 # local
-from controllora import ControlLoRAModel
-from utils import BestEmbeddings
+from model.controllora import ControlLoRAModel
+from model.utils import BestEmbeddings
 
 # efficientvit
 sys.path.insert(0, "efficientvit")

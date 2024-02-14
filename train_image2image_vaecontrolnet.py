@@ -49,16 +49,16 @@ from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version
 
 from diffusers.pipelines.controlnet.multicontrolnet import MultiControlNetModel
-from controllora import ControlLoRAModel
+from model.controllora import ControlLoRAModel
 
 from diffusers.training_utils import compute_snr
 
 from dataset_local import edgestyle_dataset, edgestyle_dataset_test
-from utils import PairedTransform
+from model.utils import PairedTransform
 from PIL import Image
 
 
-from utils import InverseEmbeddings
+from model.utils import InverseEmbeddings
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.24.0")

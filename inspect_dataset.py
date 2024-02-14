@@ -5,7 +5,7 @@ import torch
 from tqdm import tqdm
 import math
 
-from utils import PairedTransform, PatchedTransform
+from model.utils import PairedTransform, PatchedTransform
 
 DATASET_PATH = "./temp/inspect_dataset"
 

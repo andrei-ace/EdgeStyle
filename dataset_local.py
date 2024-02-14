@@ -18,7 +18,7 @@ from transformers import (
 )
 
 from tqdm import tqdm
-from utils import BestEmbeddings
+from model.utils import BestEmbeddings
 
 IMAGES_PATH = "data/image/"
 

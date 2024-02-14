@@ -18,8 +18,8 @@ from diffusers.pipelines.controlnet.multicontrolnet import MultiControlNetModel
 from transformers import AutoTokenizer, CLIPTextModel, CLIPModel, CLIPProcessor
 
 # local
-from controllora import ControlLoRAModel
-from utils import BestEmbeddings
+from model.controllora import ControlLoRAModel
+from model.utils import BestEmbeddings
 
 
 RESOLUTION = 512
