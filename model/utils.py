@@ -19,7 +19,7 @@ BG_COLOR_CONTROLNET = (0, 0, 0)
 
 IMAGES_TRANSFORMS = transforms.Compose(
     [
-        transforms.Resize(RESOLUTION, interpolation=InterpolationMode.BILINEAR),
+        transforms.Resize(RESOLUTION, interpolation=InterpolationMode.NEAREST_EXACT),
         transforms.CenterCrop(RESOLUTION),
         transforms.ToTensor(),
         transforms.Normalize([0.5], [0.5]),
@@ -28,7 +28,7 @@ IMAGES_TRANSFORMS = transforms.Compose(
 
 CONDITIONING_IMAGES_TRANSFORMS = transforms.Compose(
     [
-        transforms.Resize(RESOLUTION, interpolation=InterpolationMode.BILINEAR),
+        transforms.Resize(RESOLUTION, interpolation=InterpolationMode.NEAREST_EXACT),
         transforms.CenterCrop(RESOLUTION),
         transforms.ToTensor(),
     ]
@@ -741,7 +741,6 @@ class Augmentations:
             original = ex["original"]
             agnostic = ex["agnostic"]
             head = ex["head"]
-            mask = ex["mask"]
             original_openpose = ex["original_openpose"]
             target = ex["target"]
             clothes = ex["clothes"]
@@ -794,7 +793,6 @@ class Augmentations:
                 "original": original,
                 "agnostic": agnostic,
                 "head": head,
-                "mask": mask,
                 "original_openpose": original_openpose,
                 "clothes": clothes,
                 "clothes_openpose": clothes_openpose,
@@ -900,6 +898,7 @@ class CollateFn:
         proportion_cutout_images=0.0,
         proportion_patchworks=0.0,
         uses_vae=False,
+        use_inpaint=False,
     ):
         self.augmentations = Augmentations(
             empty_prompt=empty_prompt,
@@ -913,6 +912,7 @@ class CollateFn:
             RESOLUTION, (BG_COLOR, BG_COLOR, BG_COLOR_CONTROLNET)
         )
         self.uses_vae = uses_vae
+        self.use_inpaint = use_inpaint
 
     def __call__(self, examples):
         # Initialize the transforms
@@ -975,11 +975,48 @@ class CollateFn:
             [torch.from_numpy(np.array(ex["input_ids"])) for ex in examples]
         )
 
+        if self.use_inpaint:
+            tensors["agnostic"] = self.make_inpaint_condition(tensors["agnostic"])
+            tensors["head"] = self.make_inpaint_condition(tensors["head"])
+
         return tensors
 
     def _stack_and_format(self, images, transform):
         stacked_images = torch.stack([transform(img) for img in images])
         return stacked_images.to(memory_format=torch.contiguous_format).float()
+
+    def make_inpaint_condition(self, images: torch.Tensor):
+        """
+        Modify the background pixels of images to be -1 where the background is equal to target_value.
+
+        Args:
+        - images (torch.Tensor): Input tensor of images with shape (N, C, H, W) normalized in [-1, 1] range.
+        - target_value (tuple): RGB values in the range [0, 255] to be considered as background.
+
+        Returns:
+        - torch.Tensor: Modified images with background pixels set to -1.
+        """
+        # Normalize the target RGB values to [-1, 1] range
+        normalized_target = [(v / 255.0) * 2.0 - 1 for v in BG_COLOR]
+
+        # Create a mask for pixels to be changed. Start with an empty mask that is False everywhere
+        mask = torch.zeros_like(images, dtype=torch.bool)
+
+        # For each channel in the image, mark the pixels that match the normalized target value for that channel
+        for channel, target_val in enumerate(normalized_target):
+            # Use a small epsilon to account for floating-point arithmetic issues and jpeg compression
+            epsilon = 0.1
+            mask[:, channel, :, :] = (
+                images[:, channel, :, :] > (target_val - epsilon)
+            ) & (images[:, channel, :, :] < (target_val + epsilon))
+
+        # Check if all channels of a pixel match the target value to consider it as background
+        mask = mask.all(dim=1, keepdim=True)
+
+        # Set those pixels across all channels to -1
+        images[mask.expand_as(images)] = -1
+
+        return images
 
 
 if __name__ == "__main__":

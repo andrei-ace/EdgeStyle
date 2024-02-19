@@ -74,7 +74,7 @@ PROMT_TO_ADD = (
     ", gray background, RAW photo, subject, 8k uhd, dslr, soft lighting, high quality"
 )
 
-CONTROLNET_PATTERN = [0, None, 1, None, 1, None]
+CONTROLNET_PATTERN = [None, None, 1, None, 1, None]
 
 
 def log_validation(
@@ -275,6 +275,13 @@ def parse_args(input_args=None):
         default=None,
         required=True,
         help="Path to pretrained openpose model or model identifier from huggingface.co/models.",
+    )
+    parser.add_argument(
+        "--pretrained_inpaint_name_or_path",
+        type=str,
+        default=None,
+        required=True,
+        help="Path to pretrained inpaint model or model identifier from huggingface.co/models.",
     )
     parser.add_argument(
         "--controlnet_model_name_or_path",
@@ -750,26 +757,25 @@ def main(args):
     )
     openpose.requires_grad_(False)
 
+    inpaint = ControlNetModel.from_pretrained(
+        args.pretrained_inpaint_name_or_path, torch_dtype=weight_dtype
+    )
+    inpaint.requires_grad_(False)
+
     if args.controlnet_model_name_or_path:
         controlnet = EdgeStyleMultiControlNetModel.from_pretrained(
             args.controlnet_model_name_or_path,
+            static_controlnets=[inpaint, openpose, None, openpose, None, openpose],
             vae=vae if args.controllora_use_vae else None,
             controlnet_class=ControlLoRAModel,
             load_pattern=CONTROLNET_PATTERN,
-            static_controlnets=[None, openpose, None, openpose, None, openpose],
         )
         for net in controlnet.nets:
-            if net is not openpose:
+            if net is not openpose and net is not inpaint:
                 net.tie_weights(unet)
     else:
         logger.info("Initializing controlnet weights from unet")
-        controllora_clothes = ControlLoRAModel.from_unet(
-            unet,
-            lora_linear_rank=args.controllora_linear_rank,
-            lora_conv2d_rank=args.controllora_conv2d_rank,
-            autoencoder=vae if args.controllora_use_vae else None,
-        )
-        controllora_agnostic = ControlLoRAModel.from_unet(
+        controllora = ControlLoRAModel.from_unet(
             unet,
             lora_linear_rank=args.controllora_linear_rank,
             lora_conv2d_rank=args.controllora_conv2d_rank,
@@ -777,18 +783,18 @@ def main(args):
         )
         controlnet = EdgeStyleMultiControlNetModel(
             [
-                controllora_agnostic,
+                inpaint,
                 openpose,
-                controllora_clothes,
+                controllora,
                 openpose,
-                controllora_clothes,
+                controllora,
                 openpose,
             ]
         )
 
     controlnet.train()
     for net in controlnet.nets:
-        if net is not openpose:
+        if net is not openpose and net is not inpaint:
             net.train()
 
     # `accelerate` 0.16.0 will have better support for customized saving
@@ -810,7 +816,7 @@ def main(args):
                         output_dir,
                         load_pattern=CONTROLNET_PATTERN,
                         static_controlnets=[
-                            None,
+                            inpaint,
                             openpose,
                             None,
                             openpose,
@@ -849,7 +855,14 @@ def main(args):
                 load_model = EdgeStyleMultiControlNetModel.from_pretrained(
                     input_dir,
                     load_pattern=CONTROLNET_PATTERN,
-                    static_controlnets=[None, openpose, None, openpose, None, openpose],
+                    static_controlnets=[
+                        inpaint,
+                        openpose,
+                        None,
+                        openpose,
+                        None,
+                        openpose,
+                    ],
                     vae=vae if args.controllora_use_vae else None,
                     controlnet_class=ControlLoRAModel,
                 )
@@ -857,7 +870,7 @@ def main(args):
                 model.load_state_dict(load_model.state_dict())
 
                 for net, loaded_net_model in zip(model.nets, load_model.nets):
-                    if net is not openpose:
+                    if net is not openpose and net is not inpaint:
                         net.load_state_dict(loaded_net_model.state_dict())
 
                 # assert controlloras with index 2 and 4 have the same weights
@@ -872,7 +885,7 @@ def main(args):
                 del load_model
 
                 for net in model.nets:
-                    if net is not openpose:
+                    if net is not openpose and net is not inpaint:
                         net.tie_weights(unet)
 
         accelerator.register_save_state_pre_hook(save_model_hook)
@@ -885,7 +898,7 @@ def main(args):
     )
 
     for net in controlnet.nets:
-        if net is not openpose:
+        if net is not openpose and net is not inpaint:
             if accelerator.unwrap_model(net).dtype != torch.float32:
                 raise ValueError(
                     f"Controlnet loaded as datatype {accelerator.unwrap_model(controlnet).dtype}. {low_precision_error_string}"
@@ -977,6 +990,7 @@ def main(args):
         proportion_cutout_images=args.proportion_cutout_images,
         proportion_patchworks=args.proportion_patchworks,
         uses_vae=args.controllora_use_vae,
+        use_inpaint=True,
     )
 
     train_dataloader = torch.utils.data.DataLoader(
@@ -990,6 +1004,7 @@ def main(args):
     test_collate_fn = CollateFn(
         empty_prompt=empty_prompt,
         uses_vae=args.controllora_use_vae,
+        use_inpaint=True,
     )
 
     test_dataloader = torch.utils.data.DataLoader(
@@ -1368,7 +1383,6 @@ def main(args):
         controlnet.save_pretrained(
             args.output_dir,
             save_pattern=CONTROLNET_PATTERN,
-            only_one_model=True,
         )
     accelerator.end_training()
 

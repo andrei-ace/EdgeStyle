@@ -50,10 +50,6 @@ def process_dataset_back_to_images(examples):
         for binary_data in examples["clothes_openpose"]
     ]
 
-    mask = [
-        Image.open(io.BytesIO(binary_data["bytes"])) for binary_data in examples["mask"]
-    ]
-
     target = [
         Image.open(io.BytesIO(binary_data["bytes"]))
         for binary_data in examples["target"]
@@ -65,7 +61,6 @@ def process_dataset_back_to_images(examples):
     examples["original_openpose"] = original_openpose
     examples["clothes"] = clothes
     examples["clothes_openpose"] = clothes_openpose
-    examples["mask"] = mask
     examples["target"] = target
 
     return examples

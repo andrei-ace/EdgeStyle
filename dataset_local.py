@@ -69,60 +69,23 @@ def tokenize_captions(images):
 
 
 def preprocess_train(examples):
-    original = [
-        Image.open(image).convert("RGB").resize((RESOLUTION, RESOLUTION))
-        for image in examples["original"]
-    ]
 
-    agnostic = [
-        Image.open(image).convert("RGB").resize((RESOLUTION, RESOLUTION))
-        for image in examples["agnostic"]
-    ]
-
-    head = [
-        Image.open(image).convert("RGB").resize((RESOLUTION, RESOLUTION))
-        for image in examples["head"]
-    ]
-
+    original = [Image.open(image).copy() for image in examples["original"]]
+    agnostic = [Image.open(image).copy() for image in examples["agnostic"]]
+    head = [Image.open(image).copy() for image in examples["head"]]
     original_openpose = [
-        Image.open(image).convert("RGB").resize((RESOLUTION, RESOLUTION))
-        for image in examples["original_openpose"]
+        Image.open(image).copy() for image in examples["original_openpose"]
     ]
-
-    clothes = [
-        Image.open(image).convert("RGB").resize((RESOLUTION, RESOLUTION))
-        for image in examples["clothes"]
-    ]
-
-    clothes2 = [
-        Image.open(image).convert("RGB").resize((RESOLUTION, RESOLUTION))
-        for image in examples["clothes2"]
-    ]
-
+    clothes = [Image.open(image).copy() for image in examples["clothes"]]
+    clothes2 = [Image.open(image).copy() for image in examples["clothes2"]]
     clothes_openpose = [
-        Image.open(image).convert("RGB").resize((RESOLUTION, RESOLUTION))
-        for image in examples["clothes_openpose"]
+        Image.open(image).copy() for image in examples["clothes_openpose"]
     ]
-
     clothes_openpose2 = [
-        Image.open(image).convert("RGB").resize((RESOLUTION, RESOLUTION))
-        for image in examples["clothes_openpose2"]
+        Image.open(image).copy() for image in examples["clothes_openpose2"]
     ]
-
-    mask = [
-        Image.open(image).convert("RGB").resize((RESOLUTION, RESOLUTION))
-        for image in examples["mask"]
-    ]
-
-    target = [
-        Image.open(image).convert("RGB").resize((RESOLUTION, RESOLUTION))
-        for image in examples["target"]
-    ]
-
-    target2 = [
-        Image.open(image).convert("RGB").resize((RESOLUTION, RESOLUTION))
-        for image in examples["target2"]
-    ]
+    target = [Image.open(image).copy() for image in examples["target"]]
+    target2 = [Image.open(image).copy() for image in examples["target2"]]
 
     examples["original"] = original
     examples["agnostic"] = agnostic
@@ -132,7 +95,6 @@ def preprocess_train(examples):
     examples["clothes2"] = clothes2
     examples["clothes_openpose"] = clothes_openpose
     examples["clothes_openpose2"] = clothes_openpose2
-    examples["mask"] = mask
     examples["target"] = target
     examples["target2"] = target2
     examples["input_ids"] = tokenize_captions(clothes)
@@ -201,6 +163,7 @@ def compute_scores(
 
 
 def process_dataset_back_to_images(examples):
+
     original = [
         Image.open(io.BytesIO(binary_data["bytes"]))
         for binary_data in examples["original"]
@@ -240,10 +203,6 @@ def process_dataset_back_to_images(examples):
         for binary_data in examples["clothes_openpose2"]
     ]
 
-    mask = [
-        Image.open(io.BytesIO(binary_data["bytes"])) for binary_data in examples["mask"]
-    ]
-
     target = [
         Image.open(io.BytesIO(binary_data["bytes"]))
         for binary_data in examples["target"]
@@ -261,7 +220,6 @@ def process_dataset_back_to_images(examples):
     examples["clothes2"] = clothes2
     examples["clothes_openpose"] = clothes_openpose
     examples["clothes_openpose2"] = clothes_openpose2
-    examples["mask"] = mask
     examples["target"] = target
     examples["target2"] = target2
 
@@ -297,7 +255,6 @@ if not os.path.exists(DATASET_PATH):
 
         df = df.assign(agnostic=df["original"])
         df = df.assign(head=df["original"])
-        df = df.assign(mask=df["original"])
         df = df.assign(original_openpose=df["original"])
         df = df.assign(clothes_openpose=df["clothes"])
         df = df.assign(clothes_openpose2=df["clothes2"])
@@ -333,8 +290,6 @@ if not os.path.exists(DATASET_PATH):
             lambda x: os.path.join(data_dir, "openpose", x)
         )
 
-        df["mask"] = df["mask"].apply(lambda x: os.path.join(data_dir, "mask", x))
-
         df["folder_name"] = data_dir
 
         # split the dataframe into batches
@@ -365,6 +320,7 @@ if not os.path.exists(DATASET_PATH):
         df_final = pd.concat([df_final, df], ignore_index=True)
 
     dataset = Dataset.from_pandas(df_final)
+    print(dataset.column_names)
     dataset = dataset.map(preprocess_train, batched=True, batch_size=4)
     dataset.save_to_disk(DATASET_PATH)
 else:

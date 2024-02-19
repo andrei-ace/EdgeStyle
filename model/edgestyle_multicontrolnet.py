@@ -17,6 +17,35 @@ from diffusers.models.modeling_utils import (
 )
 
 
+class ControlNetBlock(nn.Module):
+    def __init__(
+        self, output_channel: int, size: Tuple[int, int], num_controlnets: int
+    ):
+        super().__init__()
+        self.first_conv = nn.Conv2d(
+            output_channel * num_controlnets,
+            output_channel,
+            kernel_size=1,
+            groups=output_channel,
+            bias=False,
+        )
+        # self.normalization = nn.LayerNorm(normalized_shape=[output_channel, *size])
+        self.activation = nn.SiLU()
+        self.second_conv = nn.Conv2d(
+            output_channel,
+            output_channel,
+            kernel_size=1,
+            # groups=output_channel,
+            bias=False,
+        )
+
+    def forward(self, x: torch.tensor) -> Union[ControlNetOutput, Tuple]:
+        x = self.first_conv(x)
+        hidden_states = self.activation(x)
+        hidden_states = self.second_conv(hidden_states)
+        return hidden_states + x
+
+
 class EdgeStyleMultiControlNetModel(MultiControlNetModel):
     def __init__(
         self, controlnets: Union[List[ControlNetModel], Tuple[ControlNetModel]]
@@ -38,45 +67,31 @@ class EdgeStyleMultiControlNetModel(MultiControlNetModel):
             1280,
             1280,
         ]
+        self.down_sizes = [
+            (64, 64),
+            (64, 64),
+            (64, 64),
+            (32, 32),
+            (32, 32),
+            (32, 32),
+            (16, 16),
+            (16, 16),
+            (16, 16),
+            (8, 8),
+            (8, 8),
+            (8, 8),
+        ]
         self.mid_output_channels = 1280
-        for output_channel in self.down_output_channels:
-            controlnet_block = nn.Sequential(
-                nn.Conv2d(
-                    output_channel * len(controlnets),
-                    output_channel,
-                    kernel_size=1,
-                    groups=output_channel,
-                ),
-                nn.SiLU(),
-                nn.Dropout2d(0.5),
-                nn.Conv2d(
-                    output_channel,
-                    output_channel,
-                    kernel_size=1,
-                    groups=output_channel,
-                ),
-            )
+        self.mid_size = (8, 8)
+        for output_channel, size in zip(self.down_output_channels, self.down_sizes):
+            controlnet_block = ControlNetBlock(output_channel, size, len(controlnets))
             # controlnet_block = zero_module(controlnet_block)
             # controlnet_block = ones_module(controlnet_block)
             self.multi_controlnet_down_blocks.append(controlnet_block)
 
         output_channel = self.mid_output_channels
-        controlnet_block = nn.Sequential(
-            nn.Conv2d(
-                output_channel * len(controlnets),
-                output_channel,
-                kernel_size=1,
-                groups=output_channel,
-            ),
-            nn.SiLU(),
-            nn.Dropout2d(0.5),
-            nn.Conv2d(
-                output_channel,
-                output_channel,
-                kernel_size=1,
-                groups=output_channel,
-            ),
-        )  # type: ignore
+        size = self.mid_size
+        controlnet_block = ControlNetBlock(output_channel, size, len(controlnets))
         # controlnet_block = zero_module(controlnet_block)
         # controlnet_block = ones_module(controlnet_block)
         self.multi_controlnet_mid_block = controlnet_block
@@ -188,11 +203,11 @@ class EdgeStyleMultiControlNetModel(MultiControlNetModel):
         push_to_hub: bool = False,
         **kwargs,
     ):
+
         if os.path.isfile(save_directory):
             raise ValueError(
                 f"Provided path ({save_directory}) should be a directory, not a file"
             )
-            return
 
         os.makedirs(save_directory, exist_ok=True)
 
@@ -225,10 +240,58 @@ class EdgeStyleMultiControlNetModel(MultiControlNetModel):
         if "save_pattern" in kwargs:
             save_pattern = kwargs["save_pattern"]
         else:
-            save_pattern = [True] * len(self.nets)
+            save_pattern = [None] * len(self.nets)
+
+            # if only_one_model:
+            #     # retrieve all controlnets that are are in the save_pattern
+            #     controlnets = []
+            #     for i, controlnet in enumerate(self.nets):
+            #         # get the save_pattern from kwargs
+            #         if save_pattern[i]:
+            #             controlnets.append(controlnet)
+
+            #     # check the parameters of the controlnets are equal
+            #     state_dicts = [controlnet.state_dict() for controlnet in controlnets]
+            #     for i in range(1, len(state_dicts)):
+            #         state_dict1 = state_dicts[i]
+            #         state_dict2 = state_dicts[0]
+            #         for state1, state2 in zip(state_dict1, state_dict2):
+            #             state1_value = state_dict1[state1]
+            #             state2_value = state_dict2[state2]
+            #             if (state1_value != state2_value).any():
+            #                 raise Exception(
+            #                     "States are not equal for all controlnets which are being saved"
+            #                 )
+
+            #     for i, controlnet in enumerate(self.nets):
+            #         # get the save_pattern from kwargs
+            #         if save_pattern[i]:
+            #             if controlnet.config.uses_vae:
+            #                 vae = controlnet.controlnet_cond_embedding.autoencoder
+            #                 controlnet.set_autoencoder(None)
+            #             controlnet.save_pretrained(
+            #                 os.path.join(model_path_to_save, f"controlnet"),
+            #                 is_main_process=is_main_process,
+            #                 save_function=save_function,
+            #                 safe_serialization=safe_serialization,
+            #                 variant=variant,
+            #             )
+            #             if controlnet.config.uses_vae:
+            #                 if controlnet.config.uses_vae:
+            #                     controlnet.set_autoencoder(vae)
+            #             break
+            # else:
+
+        # save_pattern is a list of integers or None
+        # find the largest value in the save_pattern
+        alreadysaved = []
         for i, controlnet in enumerate(self.nets):
             # get the save_pattern from kwargs
-            if save_pattern[i]:
+            if save_pattern[i] is not None and save_pattern[i] not in alreadysaved:
+                idx = save_pattern[i]
+                if controlnet.config.uses_vae:
+                    vae = controlnet.controlnet_cond_embedding.autoencoder
+                    controlnet.set_autoencoder(None)
                 controlnet.save_pretrained(
                     os.path.join(model_path_to_save, f"controlnet_{idx}"),
                     is_main_process=is_main_process,
@@ -236,7 +299,10 @@ class EdgeStyleMultiControlNetModel(MultiControlNetModel):
                     safe_serialization=safe_serialization,
                     variant=variant,
                 )
-                idx += 1
+                if controlnet.config.uses_vae:
+                    if controlnet.config.uses_vae:
+                        controlnet.set_autoencoder(vae)
+                alreadysaved.append(idx)
 
     @classmethod
     def from_pretrained(
@@ -244,6 +310,7 @@ class EdgeStyleMultiControlNetModel(MultiControlNetModel):
     ):
         controlnet_class = kwargs.pop("controlnet_class", ControlNetModel)
         cache_dir = kwargs.pop("cache_dir", None)
+        ignore_mismatched_sizes = kwargs.pop("ignore_mismatched_sizes", False)
         force_download = kwargs.pop("force_download", False)
         resume_download = kwargs.pop("resume_download", False)
         proxies = kwargs.pop("proxies", None)
@@ -265,6 +332,8 @@ class EdgeStyleMultiControlNetModel(MultiControlNetModel):
             "file_type": "model",
             "framework": "pytorch",
         }
+
+        model_file = None
 
         if use_safetensors:
             try:
@@ -315,35 +384,57 @@ class EdgeStyleMultiControlNetModel(MultiControlNetModel):
         else:
             raise ValueError("load_pattern must be provided")
 
-        if "filler_controlnet" in kwargs:
-            filler_controlnet = kwargs["filler_controlnet"]
+        if "static_controlnets" in kwargs:
+            static_controlnets = kwargs["static_controlnets"]
         else:
-            filler_controlnet = None
+            static_controlnets = [None] * len(load_pattern)
 
         if "vae" in kwargs:
             vae = kwargs["vae"]
         else:
             vae = None
 
-        for i in range(len(load_pattern)):
-            if load_pattern[i]:
-                controlnet = controlnet_class.from_pretrained(
-                    os.path.join(model_path_to_load, f"controlnet_{idx}"), **kwargs  # type: ignore
-                )
-                if controlnet.uses_vae:
-                    if vae is None:
-                        raise ValueError(
-                            "vae must be provided if any of the controlnets uses a vae"
-                        )
-                    controlnet.set_autoencoder(vae)
-                controlnets.append(controlnet)
-                idx += 1
+        alreadyloaded = {}
+        for i, load in enumerate(load_pattern):
+            if load is not None:
+                if not load in alreadyloaded:
+                    idx = load
+                    controlnet = controlnet_class.from_pretrained(
+                        os.path.join(model_path_to_load, f"controlnet_{idx}"), **kwargs  # type: ignore
+                    )
+                    if controlnet.config.uses_vae:
+                        if vae is None:
+                            raise ValueError(
+                                "vae must be provided if any of the controlnets uses a vae"
+                            )
+                        controlnet.set_autoencoder(vae)
+                    controlnets.append(controlnet)
+                    alreadyloaded[load] = controlnet
+                else:
+                    controlnets.append(alreadyloaded[load])
             else:
-                controlnets.append(filler_controlnet)
+                controlnets.append(static_controlnets[i])
+
+        assert len(controlnets) == len(load_pattern)
+
+        # assert controlnets are not None
+        for i, controlnet in enumerate(controlnets):
+            if controlnet is None:
+                raise ValueError(
+                    f"All controlnets must be provided. controlnet {i} is None."
+                )
 
         model = cls(controlnets)
         state_dict = load_state_dict(model_file, variant=variant)
         model._convert_deprecated_attention_blocks(state_dict)
+
+        model, _, _, _, _ = cls._load_pretrained_model(
+            model,
+            state_dict,
+            model_file,
+            pretrained_model_path,  # type: ignore
+            ignore_mismatched_sizes=ignore_mismatched_sizes,
+        )
 
         if torch_dtype is not None and not isinstance(torch_dtype, torch.dtype):
             raise ValueError(
