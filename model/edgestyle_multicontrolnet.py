@@ -6,6 +6,7 @@ from torch import nn
 
 import safetensors
 import diffusers
+from diffusers.models import Transformer2DModel
 from diffusers.models.controlnet import ControlNetModel, ControlNetOutput
 from diffusers.pipelines.controlnet.multicontrolnet import MultiControlNetModel
 from diffusers.models.modeling_utils import (
@@ -24,26 +25,40 @@ class ControlNetBlock(nn.Module):
         super().__init__()
         self.first_conv = nn.Conv2d(
             output_channel * num_controlnets,
+            output_channel * num_controlnets // 2,
+            kernel_size=1,
+            groups=output_channel * num_controlnets // 2,
+        )
+        self.first_normalization = nn.LayerNorm(
+            normalized_shape=[output_channel * num_controlnets // 2, *size]
+        )
+        self.activation = nn.SiLU()
+        self.second_conv = nn.Conv2d(
+            output_channel * num_controlnets // 2,
             output_channel,
             kernel_size=1,
             groups=output_channel,
-            bias=False,
         )
-        # self.normalization = nn.LayerNorm(normalized_shape=[output_channel, *size])
-        self.activation = nn.SiLU()
-        self.second_conv = nn.Conv2d(
+        self.second_normalization = nn.LayerNorm(
+            normalized_shape=[output_channel, *size]
+        )
+
+        self.third_conv = nn.Conv2d(
             output_channel,
             output_channel,
             kernel_size=1,
-            # groups=output_channel,
-            bias=False,
+            groups=output_channel,
         )
 
     def forward(self, x: torch.tensor) -> Union[ControlNetOutput, Tuple]:
         x = self.first_conv(x)
-        hidden_states = self.activation(x)
-        hidden_states = self.second_conv(hidden_states)
-        return hidden_states + x
+        x = self.first_normalization(x)
+        x = self.activation(x)
+        x = self.second_conv(x)
+        x = self.second_normalization(x)
+        x = self.activation(x)
+        x = self.third_conv(x)
+        return x
 
 
 class EdgeStyleMultiControlNetModel(MultiControlNetModel):
@@ -241,46 +256,6 @@ class EdgeStyleMultiControlNetModel(MultiControlNetModel):
             save_pattern = kwargs["save_pattern"]
         else:
             save_pattern = [None] * len(self.nets)
-
-            # if only_one_model:
-            #     # retrieve all controlnets that are are in the save_pattern
-            #     controlnets = []
-            #     for i, controlnet in enumerate(self.nets):
-            #         # get the save_pattern from kwargs
-            #         if save_pattern[i]:
-            #             controlnets.append(controlnet)
-
-            #     # check the parameters of the controlnets are equal
-            #     state_dicts = [controlnet.state_dict() for controlnet in controlnets]
-            #     for i in range(1, len(state_dicts)):
-            #         state_dict1 = state_dicts[i]
-            #         state_dict2 = state_dicts[0]
-            #         for state1, state2 in zip(state_dict1, state_dict2):
-            #             state1_value = state_dict1[state1]
-            #             state2_value = state_dict2[state2]
-            #             if (state1_value != state2_value).any():
-            #                 raise Exception(
-            #                     "States are not equal for all controlnets which are being saved"
-            #                 )
-
-            #     for i, controlnet in enumerate(self.nets):
-            #         # get the save_pattern from kwargs
-            #         if save_pattern[i]:
-            #             if controlnet.config.uses_vae:
-            #                 vae = controlnet.controlnet_cond_embedding.autoencoder
-            #                 controlnet.set_autoencoder(None)
-            #             controlnet.save_pretrained(
-            #                 os.path.join(model_path_to_save, f"controlnet"),
-            #                 is_main_process=is_main_process,
-            #                 save_function=save_function,
-            #                 safe_serialization=safe_serialization,
-            #                 variant=variant,
-            #             )
-            #             if controlnet.config.uses_vae:
-            #                 if controlnet.config.uses_vae:
-            #                     controlnet.set_autoencoder(vae)
-            #             break
-            # else:
 
         # save_pattern is a list of integers or None
         # find the largest value in the save_pattern

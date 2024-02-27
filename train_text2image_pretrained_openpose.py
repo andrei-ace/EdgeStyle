@@ -286,7 +286,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--controllora_linear_rank",
         type=int,
-        default=128,
+        default=32,
         help=("The dimension of the Linear Module LoRA update matrices."),
     )
     parser.add_argument(
@@ -1104,44 +1104,56 @@ def main(args):
             global_step = int(path.split("-")[1])
             initial_global_step = global_step
             first_epoch = global_step // num_update_steps_per_epoch
-            if args.lr_scheduler == "constant":
-                # change learning rate to the configured value
-                if args.optimizer.lower() == "adamw":
-                    optimizer_class = torch.optim.AdamW
+            # if args.lr_scheduler == "constant":
+            #     # change learning rate to the configured value
+            #     controlnet_parameters = list(
+            #         filter(lambda p: p.requires_grad, controlnet.parameters())
+            #     )
 
-                    optimizer = optimizer_class(
-                        params_to_optimize,
-                        betas=(args.adam_beta1, args.adam_beta2),
-                        weight_decay=args.adam_weight_decay,
-                        eps=args.adam_epsilon,
-                    )
+            #     # Optimization parameters
+            #     controlnet_parameters_with_lr = {
+            #         "params": controlnet_parameters,
+            #         "lr": args.learning_rate,
+            #     }
 
-                if args.optimizer.lower() == "prodigy":
+            #     params_to_optimize = [controlnet_parameters_with_lr]
 
-                    optimizer_class = prodigyopt.Prodigy
+            #     if args.optimizer.lower() == "adamw":
+            #         optimizer_class = torch.optim.AdamW
 
-                    optimizer = optimizer_class(
-                        params_to_optimize,
-                        lr=args.learning_rate,
-                        betas=(args.adam_beta1, args.adam_beta2),
-                        beta3=args.prodigy_beta3,
-                        weight_decay=args.adam_weight_decay,
-                        eps=args.adam_epsilon,
-                        decouple=args.prodigy_decouple,
-                        use_bias_correction=args.prodigy_use_bias_correction,
-                        safeguard_warmup=args.prodigy_safeguard_warmup,
-                    )
+            #         optimizer = optimizer_class(
+            #             params_to_optimize,
+            #             betas=(args.adam_beta1, args.adam_beta2),
+            #             weight_decay=args.adam_weight_decay,
+            #             eps=args.adam_epsilon,
+            #         )
 
-                lr_scheduler = get_scheduler(
-                    args.lr_scheduler,
-                    optimizer=optimizer,
-                    num_warmup_steps=args.lr_warmup_steps * accelerator.num_processes,
-                    num_training_steps=args.max_train_steps * accelerator.num_processes,
-                    num_cycles=args.lr_num_cycles,
-                    power=args.lr_power,
-                )
+            #     if args.optimizer.lower() == "prodigy":
 
-                optimizer, lr_scheduler = accelerator.prepare(optimizer, lr_scheduler)
+            #         optimizer_class = prodigyopt.Prodigy
+
+            #         optimizer = optimizer_class(
+            #             params_to_optimize,
+            #             lr=args.learning_rate,
+            #             betas=(args.adam_beta1, args.adam_beta2),
+            #             beta3=args.prodigy_beta3,
+            #             weight_decay=args.adam_weight_decay,
+            #             eps=args.adam_epsilon,
+            #             decouple=args.prodigy_decouple,
+            #             use_bias_correction=args.prodigy_use_bias_correction,
+            #             safeguard_warmup=args.prodigy_safeguard_warmup,
+            #         )
+
+            #     lr_scheduler = get_scheduler(
+            #         args.lr_scheduler,
+            #         optimizer=optimizer,
+            #         num_warmup_steps=args.lr_warmup_steps * accelerator.num_processes,
+            #         num_training_steps=args.max_train_steps * accelerator.num_processes,
+            #         num_cycles=args.lr_num_cycles,
+            #         power=args.lr_power,
+            #     )
+
+            #     optimizer, lr_scheduler = accelerator.prepare(optimizer, lr_scheduler)
 
     else:
         initial_global_step = 0
@@ -1157,6 +1169,7 @@ def main(args):
     validation_batch = next(iter(test_dataloader))
     for epoch in range(first_epoch, args.num_train_epochs):
         train_loss = 0.0
+        train_lr = 0.0
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(controlnet):
                 with torch.autocast("cuda"):
@@ -1250,35 +1263,39 @@ def main(args):
                             f"Unknown prediction type {noise_scheduler.config.prediction_type}"
                         )
 
-                    # print(model_pred)
-                    if args.snr_gamma is None:
-                        loss = F.mse_loss(
-                            model_pred.float(), target.float(), reduction="mean"
-                        )
-                    else:
-                        # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
-                        # Since we predict the noise instead of x_0, the original formulation is slightly changed.
-                        # This is discussed in Section 4.2 of the same paper.
-                        snr = compute_snr(noise_scheduler, timesteps)
-                        if noise_scheduler.config.prediction_type == "v_prediction":
-                            # Velocity objective requires that we add one to SNR values before we divide by them.
-                            snr = snr + 1
-                        mse_loss_weights = (
-                            torch.stack(
-                                [snr, args.snr_gamma * torch.ones_like(timesteps)],
-                                dim=1,
-                            ).min(dim=1)[0]
-                            / snr
-                        )
+                # print(model_pred)
+                if args.snr_gamma is None:
+                    loss = F.mse_loss(
+                        model_pred.float(), target.float(), reduction="mean"
+                    )
+                else:
+                    # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
+                    # Since we predict the noise instead of x_0, the original formulation is slightly changed.
+                    # This is discussed in Section 4.2 of the same paper.
+                    snr = compute_snr(noise_scheduler, timesteps)
+                    if noise_scheduler.config.prediction_type == "v_prediction":
+                        # Velocity objective requires that we add one to SNR values before we divide by them.
+                        snr = snr + 1
+                    mse_loss_weights = (
+                        torch.stack(
+                            [snr, args.snr_gamma * torch.ones_like(timesteps)],
+                            dim=1,
+                        ).min(dim=1)[0]
+                        / snr
+                    )
 
-                        loss = F.mse_loss(
-                            model_pred.float(), target.float(), reduction="none"
-                        )
-                        loss = (
-                            loss.mean(dim=list(range(1, len(loss.shape))))
-                            * mse_loss_weights
-                        )
-                        loss = loss.mean()
+                    loss = F.mse_loss(
+                        model_pred.float(), target.float(), reduction="none"
+                    )
+                    loss = (
+                        loss.mean(dim=list(range(1, len(loss.shape))))
+                        * mse_loss_weights
+                    )
+                    loss = loss.mean()
+
+                train_lr += (
+                    optimizer.param_groups[0]["d"] / args.gradient_accumulation_steps
+                )
 
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
@@ -1298,8 +1315,15 @@ def main(args):
                 progress_bar.update(1)
                 global_step += 1
 
-                accelerator.log({"train_loss": train_loss}, step=global_step)
+                accelerator.log(
+                    {
+                        "train_loss": train_loss,
+                        "train_lr": train_lr,
+                    },
+                    step=global_step,
+                )
                 train_loss = 0.0
+                train_lr = 0.0
 
                 if accelerator.is_main_process:
                     if global_step % args.checkpointing_steps == 0:
