@@ -44,7 +44,7 @@ python segmenter_training_clothes.py
 python segmenter_training_body.py
 ```
 
-# create the dataset from videos (optional
+# create the dataset from videos (optional)
 ```
 python extract_dataset.py
 ```
