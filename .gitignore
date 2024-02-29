@@ -12,3 +12,4 @@ temp/
 train_*.sh
 test_*.sh
 inference_*.sh
+.DS_Store

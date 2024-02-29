@@ -59,3 +59,59 @@ python segmenter_training_body.py
 ```
 python extract_dataset.py
 ```
+
+# Training
+## Start training for 20k steps
+```
+accelerate launch train_text2image_pretrained_openpose.py \
+--pretrained_model_name_or_path="SG161222/Realistic_Vision_V5.1_noVAE" \
+--pretrained_vae_name_or_path="stabilityai/sd-vae-ft-mse" \
+--pretrained_openpose_name_or_path="lllyasviel/control_v11p_sd15_openpose" \
+--output_dir="models/output_text2image_pretrained_openpose" \
+--resolution=512 \
+--train_batch_size=2 \
+--gradient_accumulation_steps 32 \
+--mixed_precision fp16 \
+--controllora_use_vae \
+--seed=42 \
+--resume_from_checkpoint latest \
+--num_validation_images 4 \
+--checkpoints_total_limit 3 \
+--dataloader_num_workers 2 \
+--snr_gamma=5.0 \
+--optimizer="prodigy" \
+--learning_rate=1.0 \
+--prodigy_safeguard_warmup=True \
+--prodigy_use_bias_correction=True \
+--adam_beta1=0.9 \
+--adam_beta2=0.99 \
+--adam_weight_decay=0.01 \
+--proportion_empty_prompts=0.1 \
+--proportion_empty_images=0.1 \
+--proportion_cutout_images=0.1 \
+--proportion_patchworked_images=0.1 \
+--proportion_patchworks=0.1 \
+--validation_steps 100 \
+--checkpointing_steps 100 \
+--max_train_steps=20000
+```
+
+## Check the training status using tensorboard
+
+### training loss
+![alt text](docs/train_loss.svg)
+
+### training learning rate
+![alt text](docs/train_lr.svg)
+
+### Example image logged (after 15.7k steps)
+Left corner the groud truth, followed by the images used by the controlnets:
+* agnostic image
+* first outfit image
+* second outfit image
+* The openpose images are ommited
+
+![alt text](docs/1.png)
+![alt text](docs/2.png)
+![alt text](docs/3.png)
+![alt text](docs/4.png)
