@@ -47,6 +47,8 @@ CONDITIONING_IMAGES_TRANSFORMS = transforms.Compose(
     ]
 )
 
+CONTROLNET_PATTERN = [0, None, 1, None, 1, None]
+
 model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
 processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
 
@@ -219,42 +221,23 @@ def main(args):
             args.pretrained_model_name_or_path,
             subfolder="vae",
         )
-    vae.to(device, dtype=torch.float32)  # vae should always be in fp32
     unet = UNet2DConditionModel.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="unet",
     )
 
-    openpose = ControlNetModel.from_pretrained(
-        args.pretrained_openpose_name_or_path, torch_dtype=torch.float16
-    )
+    openpose = ControlNetModel.from_pretrained(args.pretrained_openpose_name_or_path)
 
-    controlnet = EdgeStyleMultiControlNetModel(
-        [
-            ControlLoRAModel.from_pretrained(
-                args.controlnet_model_name_or_path,
-                subfolder="controlnet-0",
-                vae=vae if args.controllora_use_vae else None,
-            ),
-            openpose,
-            ControlLoRAModel.from_pretrained(
-                args.controlnet_model_name_or_path,
-                subfolder="controlnet-1",
-                vae=vae if args.controllora_use_vae else None,
-            ),
-            openpose,
-            ControlLoRAModel.from_pretrained(
-                args.controlnet_model_name_or_path,
-                subfolder="controlnet-2",
-                vae=vae if args.controllora_use_vae else None,
-            ),
-            openpose,
-        ]
+    controlnet = EdgeStyleMultiControlNetModel.from_pretrained(
+        args.controlnet_model_name_or_path,
+        vae=vae if args.controllora_use_vae else None,
+        controlnet_class=ControlLoRAModel,
+        load_pattern=CONTROLNET_PATTERN,
+        static_controlnets=[None, openpose, None, openpose, None, openpose],
     )
     for net in controlnet.nets:
-        if net.uses_vae:
-            net.set_autoencoder(vae)
-        net.tie_weights(unet)
+        if net is not openpose:
+            net.tie_weights(unet)
 
     pipeline = StableDiffusionControlNetPipeline.from_pretrained(
         args.pretrained_model_name_or_path,
@@ -264,9 +247,7 @@ def main(args):
         unet=unet,
         controlnet=controlnet,
         safety_checker=None,
-        torch_dtype=torch.float16,
     )
-    # pipeline.enable_freeu(s1=0.9, s2=0.2, b1=1.5, b2=1.6)
     pipeline.scheduler = UniPCMultistepScheduler.from_config(pipeline.scheduler.config)
     generator = torch.Generator(device).manual_seed(42)
     pipeline = pipeline.to(device)
@@ -312,7 +293,7 @@ def main(args):
 
     prompts = best_embeddings([clothes])
 
-    guidance_scales = np.linspace(1.0, 7.5, NUM_IMAGES)
+    guidance_scales = np.linspace(3.0, 7.5, NUM_IMAGES)
 
     images = [
         subject,
@@ -324,11 +305,7 @@ def main(args):
         with torch.autocast("cuda"):
             image = pipeline(
                 prompt=prompts[0] + " " + args.prompt_text_to_add,
-                # prompt=prompts[0] + "detailed, ultra quality, sharp focus, 8K UHD",
-                # prompt="clear face, full body, ultra quality, sharp focus, 8K UHD",
-                # prompt="edgestyle",
                 guidance_scale=guidance_scales[i],
-                # guess_mode=True,
                 image=[
                     (
                         IMAGES_TRANSFORMS(agnostic_or_head).unsqueeze(0)
@@ -351,7 +328,7 @@ def main(args):
                     ),
                     CONDITIONING_IMAGES_TRANSFORMS(clothes_openpose2).unsqueeze(0),
                 ],
-                # controlnet_conditioning_scale=[0.5, 0.5, 1, 1],
+                # controlnet_conditioning_scale=[1, 1, 1, 1],
                 # control_guidance_start=0.0,
                 # control_guidance_end=0.9,
                 negative_prompt=args.negative_prompt,
