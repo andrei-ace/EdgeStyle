@@ -146,5 +146,8 @@ python test_text2image_pretrained_openpose.py \
 --image_result_name="pretrained_openpose.jpg"
 ```
 
-## Result after 20k training steps
+## Results after 20k training steps
 ![20k](docs/pretrained_openpose_20k.jpg)
+
+## Results after 21.5k training steps
+![21.5k](docs/pretrained_openpose_21.5k.jpg)
