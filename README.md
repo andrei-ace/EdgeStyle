@@ -12,7 +12,7 @@ pip install -r requirements.txt
 ```
 Or alternatively
 ```
-pip install lightning tensorboard torch-tb-profiler opencv-python pandas  controlnet-aux tqdm  torchpack onnx onnxsim segment_anything monai  prodigyopt torchmetrics[multimodal]
+pip install lightning tensorboard torch-tb-profiler opencv-python pandas  controlnet-aux tqdm  torchpack onnx onnxsim segment_anything monai  prodigyopt torchmetrics[multimodal] gradio
 
 pip install datasets transformers accelerate diffusers
 ```
@@ -151,3 +151,18 @@ python test_text2image_pretrained_openpose.py \
 
 ## Results after 21.5k training steps
 ![21.5k](docs/pretrained_openpose_21.5k.jpg)
+
+
+# Running on jetson
+
+```
+cd models
+git clone https://huggingface.co/SG161222/Realistic_Vision_V5.1_noVAE
+git clone https://huggingface.co/stabilityai/sd-vae-ft-mse
+git clone https://huggingface.co/lllyasviel/control_v11p_sd15_openpose
+git clone https://huggingface.co/openai/clip-vit-large-patch14
+```
+
+```
+python app.py
+```
