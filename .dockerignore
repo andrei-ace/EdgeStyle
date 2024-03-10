@@ -1,4 +1,5 @@
+venv/
 .venv/
-__pycache__/
-.git/
-.gitattributes
+**/__pycache__/
+**/.git
+**/.gitattributes
