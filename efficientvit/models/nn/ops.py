@@ -2,6 +2,8 @@
 # Han Cai, Junyan Li, Muyan Hu, Chuang Gan, Song Han
 # International Conference on Computer Vision (ICCV), 2023
 
+from typing import List, Dict, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -343,7 +345,7 @@ class LiteMLA(nn.Module):
         norm=(None, "bn2d"),
         act_func=(None, None),
         kernel_func="relu",
-        scales: tuple[int, ...] = (5,),
+        scales: Tuple[int, ...] = (5,),
         eps=1.0e-15,
     ):
         super(LiteMLA, self).__init__()
@@ -531,11 +533,11 @@ class ResidualBlock(nn.Module):
 class DAGBlock(nn.Module):
     def __init__(
         self,
-        inputs: dict[str, nn.Module],
+        inputs: Dict[str, nn.Module],
         merge: str,
         post_input: nn.Module or None,
         middle: nn.Module,
-        outputs: dict[str, nn.Module],
+        outputs: Dict[str, nn.Module],
     ):
         super(DAGBlock, self).__init__()
 
@@ -549,7 +551,7 @@ class DAGBlock(nn.Module):
         self.output_keys = list(outputs.keys())
         self.output_ops = nn.ModuleList(list(outputs.values()))
 
-    def forward(self, feature_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def forward(self, feature_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         feat = [op(feature_dict[key]) for key, op in zip(self.input_keys, self.input_ops)]
         if self.merge == "add":
             feat = list_sum(feat)
@@ -566,7 +568,7 @@ class DAGBlock(nn.Module):
 
 
 class OpSequential(nn.Module):
-    def __init__(self, op_list: list[nn.Module or None]):
+    def __init__(self, op_list: List[nn.Module or None]):
         super(OpSequential, self).__init__()
         valid_op_list = []
         for op in op_list:

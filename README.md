@@ -153,10 +153,37 @@ python test_text2image_pretrained_openpose.py \
 ![21.5k](docs/pretrained_openpose_21.5k.jpg)
 
 
-# Running on jetson
+# Running on jetson 
+
+## Create local environment (Optional)
 
 ```
+cat /etc/nv_tegra_release 
+# R35 (release), REVISION: 2.1
+```
+
+Install pytorch and pyvision ![PyTorch for Jetson](https://forums.developer.nvidia.com/t/pytorch-for-jetson/72048)
+
+```
+sudo apt-get install libssl-dev
+wget https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3.tar.gz
+tar zxf cmake-3.28.3.tar.gz
+cd cmake-3.28.3/
+./bootstrap
+make -j$(nproc)
+sudo make install
+```
+
+```
+pip3 install --upgrade setuptools
+pip3 install -r requirements-jetson.txt
+```
+
+Make sure you have git lfs installed !(git lfs)[https://git-lfs.com/]
+```
+mkdir -p models
 cd models
+git clone https://huggingface.co/andrei-ace/EdgeStyle
 git clone https://huggingface.co/SG161222/Realistic_Vision_V5.1_noVAE
 git clone https://huggingface.co/stabilityai/sd-vae-ft-mse
 git clone https://huggingface.co/lllyasviel/control_v11p_sd15_openpose
@@ -164,5 +191,15 @@ git clone https://huggingface.co/openai/clip-vit-large-patch14
 ```
 
 ```
-python app.py
+python3 app.py
+```
+
+## Docker image (Recommended)
+```
+docker run --runtime nvidia -it --rm --network=host --rm andreiciobanu1984/edgestyle:1.0
+```
+
+### Build docker image (Optional)
+```
+docker build -t andreiciobanu1984/edgestyle:1.0 .
 ```

@@ -2,18 +2,21 @@
 # Han Cai, Junyan Li, Muyan Hu, Chuang Gan, Song Han
 # International Conference on Computer Vision (ICCV), 2023
 
+from typing import List, Dict, Tuple
+
 import numpy as np
 import torch
 import torch.nn as nn
 
-from efficientvit.apps.trainer.run_config import Scheduler
 from efficientvit.models.nn.ops import IdentityLayer, ResidualBlock
 from efficientvit.models.utils import build_kwargs_from_config
 
 __all__ = ["apply_drop_func"]
 
+class Scheduler:
+    PROGRESS = 0
 
-def apply_drop_func(network: nn.Module, drop_config: dict[str, any] or None) -> None:
+def apply_drop_func(network: nn.Module, drop_config: Dict[str, any] or None) -> None:
     if drop_config is None:
         return
 

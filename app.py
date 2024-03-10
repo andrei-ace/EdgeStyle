@@ -45,7 +45,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 PRETRAINED_MODEL_NAME_OR_PATH = "./models/Realistic_Vision_V5.1_noVAE"
 PRETRAINED_VAE_NAME_OR_PATH = "./models/sd-vae-ft-mse"
 PRETRAINED_OPENPOSE_NAME_OR_PATH = "./models/control_v11p_sd15_openpose"
-CONTROLNET_MODEL_NAME_OR_PATH = "./models/controlnet"
+CONTROLNET_MODEL_NAME_OR_PATH = "./models/EdgeStyle/controlnet"
 CLIP_MODEL_NAME_OR_PATH = "./models/clip-vit-large-patch14"
 
 
@@ -60,7 +60,7 @@ PROMT_TO_ADD = (
     ", gray background, RAW photo, subject, 8k uhd, dslr, soft lighting, high quality"
 )
 
-model = CLIPModel.from_pretrained(CLIP_MODEL_NAME_OR_PATH)
+model = CLIPModel.from_pretrained(CLIP_MODEL_NAME_OR_PATH).to(device)
 processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME_OR_PATH)
 
 best_embeddings = BestEmbeddings(model, processor)
@@ -107,6 +107,8 @@ pipeline = StableDiffusionControlNetPipeline.from_pretrained(
 )
 pipeline.scheduler = UniPCMultistepScheduler.from_config(pipeline.scheduler.config)
 generator = torch.Generator(device).manual_seed(42)
+# vae.enable_xformers_memory_efficient_attention(attention_op=None)
+# pipeline.enable_xformers_memory_efficient_attention()
 pipeline = pipeline.to(device)
 
 

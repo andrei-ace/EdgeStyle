@@ -2,6 +2,8 @@
 # Han Cai, Junyan Li, Muyan Hu, Chuang Gan, Song Han
 # International Conference on Computer Vision (ICCV), 2023
 
+from typing import List, Dict
+
 import torch
 import torch.nn as nn
 from torch.nn.modules.batchnorm import _BatchNorm
@@ -21,7 +23,7 @@ class LayerNorm2d(nn.LayerNorm):
 
 
 # register normalization function here
-REGISTERED_NORM_DICT: dict[str, type] = {
+REGISTERED_NORM_DICT: Dict[str, type] = {
     "bn2d": nn.BatchNorm2d,
     "ln": nn.LayerNorm,
     "ln2d": LayerNorm2d,
