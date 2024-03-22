@@ -5,10 +5,10 @@ import torch
 from torchvision import transforms
 from diffusers import (
     AutoencoderKL,
-    StableDiffusionControlNetPipeline,
     UNet2DConditionModel,
     UniPCMultistepScheduler,
     ControlNetModel,
+    StableDiffusionControlNetPipeline,
 )
 from diffusers.optimization import get_scheduler
 from transformers import AutoTokenizer, CLIPTextModel, CLIPModel, CLIPProcessor
@@ -20,6 +20,7 @@ from model.edgestyle_multicontrolnet import EdgeStyleMultiControlNetModel
 from model.controllora import ControlLoRAModel
 from model.utils import BestEmbeddings
 from model.edgestyle_multicontrolnet import EdgeStyleMultiControlNetModel
+from model.edgestyle_pipeline import EdgeStyleStableDiffusionControlNetPipeline
 from extract_dataset import process_batch, create_sam_images_for_batch
 
 RESOLUTION = 512
@@ -96,7 +97,17 @@ for net in controlnet.nets:
     if net is not openpose:
         net.tie_weights(unet)
 
-pipeline = StableDiffusionControlNetPipeline.from_pretrained(
+# pipeline = StableDiffusionControlNetPipeline.from_pretrained(
+#     PRETRAINED_MODEL_NAME_OR_PATH,
+#     vae=vae,
+#     text_encoder=text_encoder,
+#     tokenizer=tokenizer,
+#     unet=unet,
+#     controlnet=controlnet,
+#     safety_checker=None,
+# )
+
+pipeline = EdgeStyleStableDiffusionControlNetPipeline.from_pretrained(
     PRETRAINED_MODEL_NAME_OR_PATH,
     vae=vae,
     text_encoder=text_encoder,
