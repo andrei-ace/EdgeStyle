@@ -17,6 +17,7 @@ from diffusers.models.modeling_utils import (
     _get_model_file,
 )
 
+from model.controllora import ControlLoRAModel
 
 class ControlNetBlock(nn.Module):
     def __init__(
@@ -278,6 +279,11 @@ class EdgeStyleMultiControlNetModel(MultiControlNetModel):
                     if controlnet.config.uses_vae:
                         controlnet.set_autoencoder(vae)
                 alreadysaved.append(idx)
+
+    def fuse(self):
+        for i, controlnet in enumerate(self.nets):
+            if isinstance(controlnet, ControlLoRAModel):
+                self.nets[i] = controlnet.fuse()
 
     @classmethod
     def from_pretrained(

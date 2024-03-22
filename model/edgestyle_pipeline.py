@@ -53,8 +53,7 @@ from diffusers.pipelines.stable_diffusion.safety_checker import (
 )
 from diffusers.pipelines.controlnet.multicontrolnet import MultiControlNetModel
 
-from .edgestyle_multicontrolnet import EdgeStyleMultiControlNetModel
-from .controllora import ControlLoRAModel
+from .controllora import CachedControlNetModel
 
 
 class EdgeStyleStableDiffusionControlNetPipeline(StableDiffusionControlNetPipeline):
@@ -659,7 +658,7 @@ class EdgeStyleStableDiffusionControlNetPipeline(StableDiffusionControlNetPipeli
             image = torch.cat([image] * 2)
 
         # if is an instance of EdgeStyle ControlNet, preprocess the image to have the correct shape for latent space
-        if isinstance(controlnet, ControlLoRAModel):
+        if isinstance(controlnet, CachedControlNetModel):
             image = controlnet.preprocess_image(image)
 
         return image

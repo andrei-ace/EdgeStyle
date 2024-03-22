@@ -174,6 +174,13 @@ make -j$(nproc)
 sudo make install
 ```
 
+Install onnxruntime_gpu ![Jetson Zoo](https://elinux.org/Jetson_Zoo)
+```
+wget https://nvidia.box.com/shared/static/mvdcltm9ewdy2d5nurkiqorofz1s53ww.whl -O onnxruntime_gpu-1.15.1-cp38-cp38-linux_aarch64.whl
+pip3 install onnxruntime_gpu-1.15.1-cp38-cp38-linux_aarch64.whl
+
+```
+
 ```
 pip3 install --upgrade setuptools
 pip3 install -r requirements-jetson.txt
@@ -202,4 +209,11 @@ docker run --runtime nvidia -it --rm --network=host --rm andreiciobanu1984/edges
 ### Build docker image (Optional)
 ```
 docker build -t andreiciobanu1984/edgestyle:1.0 .
+```
+
+## ONNX
+
+```
+optimum-cli export onnx -m ./clip-vit-large-patch14/ --task image-to-text clip-vit-large-patch14-onnx
+optimum-cli export onnx -m ./Realistic_Vision_V5.1_noVAE/ --task stable-diffusion Realistic_Vision_V5.1_noVAE-onnx
 ```

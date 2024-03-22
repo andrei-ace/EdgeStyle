@@ -5,22 +5,21 @@ import torch
 from torchvision import transforms
 from diffusers import (
     AutoencoderKL,
+    StableDiffusionControlNetPipeline,
     UNet2DConditionModel,
     UniPCMultistepScheduler,
     ControlNetModel,
-    StableDiffusionControlNetPipeline,
 )
 from diffusers.optimization import get_scheduler
 from transformers import AutoTokenizer, CLIPTextModel, CLIPModel, CLIPProcessor
+from DeepCache import DeepCacheSDHelper
 
-from model.utils import BestEmbeddings
-from model.edgestyle_multicontrolnet import EdgeStyleMultiControlNetModel
+from optimum.onnxruntime import ORTModel
 
 # local
-from model.controllora import ControlLoRAModel, CachedControlNetModel
+from model.controllora import ControlLoRAModel
 from model.utils import BestEmbeddings
 from model.edgestyle_multicontrolnet import EdgeStyleMultiControlNetModel
-from model.edgestyle_pipeline import EdgeStyleStableDiffusionControlNetPipeline
 from extract_dataset import process_batch, create_sam_images_for_batch
 
 RESOLUTION = 512
@@ -43,7 +42,7 @@ CONTROLNET_PATTERN = [0, None, 1, None, 1, None]
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-PRETRAINED_MODEL_NAME_OR_PATH = "./models/Realistic_Vision_V5.1_noVAE"
+PRETRAINED_MODEL_NAME_OR_PATH = "./models/Realistic_Vision_V5.1_noVAE-onnx"
 PRETRAINED_VAE_NAME_OR_PATH = "./models/sd-vae-ft-mse"
 PRETRAINED_OPENPOSE_NAME_OR_PATH = "./models/control_v11p_sd15_openpose"
 CONTROLNET_MODEL_NAME_OR_PATH = "./models/EdgeStyle/controlnet"
@@ -84,30 +83,22 @@ unet = UNet2DConditionModel.from_pretrained(
     subfolder="unet",
 )
 
-openpose = CachedControlNetModel.from_pretrained(PRETRAINED_OPENPOSE_NAME_OR_PATH)
+openpose = ControlNetModel.from_pretrained(PRETRAINED_OPENPOSE_NAME_OR_PATH)
 
 controlnet = EdgeStyleMultiControlNetModel.from_pretrained(
     CONTROLNET_MODEL_NAME_OR_PATH,
     vae=vae,
     controlnet_class=ControlLoRAModel,
     load_pattern=CONTROLNET_PATTERN,
-    static_controlnets=[None, openpose, None, openpose, None, openpose],
+    static_controlnets=[None, openpose, None, openpose, None, openpose]
 )
 for net in controlnet.nets:
-    if net is not openpose:
-        net.tie_weights(unet)
+    if net is not openpose:        
+        net.tie_weights(unet)        
 
-# pipeline = StableDiffusionControlNetPipeline.from_pretrained(
-#     PRETRAINED_MODEL_NAME_OR_PATH,
-#     vae=vae,
-#     text_encoder=text_encoder,
-#     tokenizer=tokenizer,
-#     unet=unet,
-#     controlnet=controlnet,
-#     safety_checker=None,
-# )
+# controlnet.fuse()
 
-pipeline = EdgeStyleStableDiffusionControlNetPipeline.from_pretrained(
+pipeline = StableDiffusionControlNetPipeline.from_pretrained(
     PRETRAINED_MODEL_NAME_OR_PATH,
     vae=vae,
     text_encoder=text_encoder,
@@ -121,6 +112,13 @@ generator = torch.Generator(device).manual_seed(42)
 # vae.enable_xformers_memory_efficient_attention(attention_op=None)
 # pipeline.enable_xformers_memory_efficient_attention()
 pipeline = pipeline.to(device)
+
+# helper = DeepCacheSDHelper(pipe=pipeline)
+# helper.set_params(
+#     cache_interval=3,
+#     cache_branch_id=0,
+# )
+# helper.enable()
 
 
 def preprocess(image_subject, image_cloth1, image_cloth2):

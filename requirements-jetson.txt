@@ -1,6 +1,7 @@
 pillow==10.2.0
 torch==2.1.0a0+41361538.nv23.6
 torchvision==0.16.0
+tensorrt==8.5.2.2
 lightning
 tensorboard
 opencv-python
