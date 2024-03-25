@@ -3,24 +3,17 @@ import gradio as gr
 # torch
 import torch
 from torchvision import transforms
-from diffusers import (
-    AutoencoderKL,
-    StableDiffusionControlNetPipeline,
-    UNet2DConditionModel,
-    UniPCMultistepScheduler,
-    ControlNetModel,
-)
+from diffusers import AutoencoderKL, OnnxRuntimeModel, UniPCMultistepScheduler
 from diffusers.optimization import get_scheduler
 from transformers import AutoTokenizer, CLIPTextModel, CLIPModel, CLIPProcessor
-from DeepCache import DeepCacheSDHelper
 
-from optimum.onnxruntime import ORTModel
+from model.utils import BestEmbeddings
 
 # local
-from model.controllora import ControlLoRAModel
+from model.controllora import ControlLoRAModel, CachedControlNetModel
 from model.utils import BestEmbeddings
-from model.edgestyle_multicontrolnet import EdgeStyleMultiControlNetModel
 from extract_dataset import process_batch, create_sam_images_for_batch
+from model.edgestyle_onnx_pipeline import EdgeStyleOnnxStableDiffusionControlNetPipeline
 
 RESOLUTION = 512
 
@@ -42,7 +35,7 @@ CONTROLNET_PATTERN = [0, None, 1, None, 1, None]
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-PRETRAINED_MODEL_NAME_OR_PATH = "./models/Realistic_Vision_V5.1_noVAE-onnx"
+PRETRAINED_MODEL_NAME_OR_PATH = "./models/Realistic_Vision_V5.1_noVAE"
 PRETRAINED_VAE_NAME_OR_PATH = "./models/sd-vae-ft-mse"
 PRETRAINED_OPENPOSE_NAME_OR_PATH = "./models/control_v11p_sd15_openpose"
 CONTROLNET_MODEL_NAME_OR_PATH = "./models/EdgeStyle/controlnet"
@@ -72,53 +65,55 @@ tokenizer = AutoTokenizer.from_pretrained(
     use_fast=False,
 )
 
-text_encoder = CLIPTextModel.from_pretrained(
-    PRETRAINED_MODEL_NAME_OR_PATH,
-    subfolder="text_encoder",
+text_encoder = OnnxRuntimeModel.from_pretrained(
+    "./models/Realistic_Vision_V5.1_noVAE-onnx-/text_encoder"
 )
-vae = AutoencoderKL.from_pretrained(PRETRAINED_VAE_NAME_OR_PATH)
+# vae = AutoencoderKL.from_pretrained(PRETRAINED_VAE_NAME_OR_PATH)
 
-unet = UNet2DConditionModel.from_pretrained(
-    PRETRAINED_MODEL_NAME_OR_PATH,
-    subfolder="unet",
+# unet = UNet2DConditionModel.from_pretrained(
+#     PRETRAINED_MODEL_NAME_OR_PATH,
+#     subfolder="unet",
+# )
+
+vae_encoder = OnnxRuntimeModel.from_pretrained("./models/sd-vae-ft-mse-onnx/encoder")
+vae_decoder = OnnxRuntimeModel.from_pretrained("./models/sd-vae-ft-mse-onnx/decoder")
+
+
+unet = OnnxRuntimeModel.from_pretrained(
+    "./models/Realistic_Vision_V5.1_noVAE-onnx/unet",
 )
 
-openpose = ControlNetModel.from_pretrained(PRETRAINED_OPENPOSE_NAME_OR_PATH)
 
-controlnet = EdgeStyleMultiControlNetModel.from_pretrained(
-    CONTROLNET_MODEL_NAME_OR_PATH,
-    vae=vae,
-    controlnet_class=ControlLoRAModel,
-    load_pattern=CONTROLNET_PATTERN,
-    static_controlnets=[None, openpose, None, openpose, None, openpose]
+openpose = CachedControlNetModel.from_pretrained(PRETRAINED_OPENPOSE_NAME_OR_PATH)
+
+# controlnet = EdgeStyleMultiControlNetModel.from_pretrained(
+#     CONTROLNET_MODEL_NAME_OR_PATH,
+#     vae=vae,
+#     controlnet_class=ControlLoRAModel,
+#     load_pattern=CONTROLNET_PATTERN,
+#     static_controlnets=[None, openpose, None, openpose, None, openpose],
+# )
+# for net in controlnet.nets:
+#     if net is not openpose:
+#         net.tie_weights(unet)
+
+scheduler = UniPCMultistepScheduler.from_config(
+    PRETRAINED_MODEL_NAME_OR_PATH, subfolder="scheduler"
 )
-for net in controlnet.nets:
-    if net is not openpose:        
-        net.tie_weights(unet)        
 
-# controlnet.fuse()
-
-pipeline = StableDiffusionControlNetPipeline.from_pretrained(
-    PRETRAINED_MODEL_NAME_OR_PATH,
-    vae=vae,
+pipeline = EdgeStyleOnnxStableDiffusionControlNetPipeline(
+    vae_encoder=vae_encoder,
+    vae_decoder=vae_decoder,
     text_encoder=text_encoder,
     tokenizer=tokenizer,
     unet=unet,
-    controlnet=controlnet,
+    scheduler=scheduler,
     safety_checker=None,
+    feature_extractor=processor,
+    requires_safety_checker=False,
 )
-pipeline.scheduler = UniPCMultistepScheduler.from_config(pipeline.scheduler.config)
-generator = torch.Generator(device).manual_seed(42)
-# vae.enable_xformers_memory_efficient_attention(attention_op=None)
-# pipeline.enable_xformers_memory_efficient_attention()
+# generator = torch.Generator(device).manual_seed(42)
 pipeline = pipeline.to(device)
-
-# helper = DeepCacheSDHelper(pipe=pipeline)
-# helper.set_params(
-#     cache_interval=3,
-#     cache_branch_id=0,
-# )
-# helper.enable()
 
 
 def preprocess(image_subject, image_cloth1, image_cloth2):
@@ -153,23 +148,23 @@ def try_on(
     scale,
     steps,
 ):
-    with torch.autocast("cuda"):
-        prompts = best_embeddings([image_cloth1_clothes])
-        image = pipeline(
-            prompt=prompts[0] + " " + PROMT_TO_ADD,
-            guidance_scale=scale,
-            image=[
-                IMAGES_TRANSFORMS(image_subject_agnostic).unsqueeze(0),
-                CONDITIONING_IMAGES_TRANSFORMS(image_subject_openpose).unsqueeze(0),
-                IMAGES_TRANSFORMS(image_cloth1_clothes).unsqueeze(0),
-                CONDITIONING_IMAGES_TRANSFORMS(image_cloth1_openpose).unsqueeze(0),
-                IMAGES_TRANSFORMS(image_cloth2_clothes).unsqueeze(0),
-                CONDITIONING_IMAGES_TRANSFORMS(image_cloth2_openpose).unsqueeze(0),
-            ],
-            negative_prompt=NEGATIVE_PROMPT,
-            num_inference_steps=steps,
-            generator=generator,
-        ).images[0]
+    # with torch.autocast("cuda"):
+    prompts = best_embeddings([image_cloth1_clothes])
+    image = pipeline(
+        prompt=prompts[0] + " " + PROMT_TO_ADD,
+        guidance_scale=scale,
+        # image=[
+        #     IMAGES_TRANSFORMS(image_subject_agnostic).unsqueeze(0),
+        #     CONDITIONING_IMAGES_TRANSFORMS(image_subject_openpose).unsqueeze(0),
+        #     IMAGES_TRANSFORMS(image_cloth1_clothes).unsqueeze(0),
+        #     CONDITIONING_IMAGES_TRANSFORMS(image_cloth1_openpose).unsqueeze(0),
+        #     IMAGES_TRANSFORMS(image_cloth2_clothes).unsqueeze(0),
+        #     CONDITIONING_IMAGES_TRANSFORMS(image_cloth2_openpose).unsqueeze(0),
+        # ],
+        negative_prompt=NEGATIVE_PROMPT,
+        num_inference_steps=steps,
+        # generator=generator,
+    ).images[0]
     return image
 
 
