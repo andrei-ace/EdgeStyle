@@ -66,7 +66,7 @@ tokenizer = AutoTokenizer.from_pretrained(
 )
 
 text_encoder = OnnxRuntimeModel.from_pretrained(
-    "./models/Realistic_Vision_V5.1_noVAE-onnx-/text_encoder"
+    "./models/Realistic_Vision_V5.1_noVAE-onnx/text_encoder"
 )
 # vae = AutoencoderKL.from_pretrained(PRETRAINED_VAE_NAME_OR_PATH)
 
