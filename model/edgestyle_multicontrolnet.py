@@ -19,6 +19,7 @@ from diffusers.models.modeling_utils import (
 
 from model.controllora import ControlLoRAModel
 
+
 class ControlNetBlock(nn.Module):
     def __init__(
         self, output_channel: int, size: Tuple[int, int], num_controlnets: int

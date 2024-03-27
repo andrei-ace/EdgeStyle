@@ -4,8 +4,11 @@ import os
 import torch
 import onnx
 
+import numpy as np
+
 from diffusers import UNet2DConditionModel, AutoencoderKL
 from diffusers.models.modeling_utils import ModelMixin
+from diffusers.pipelines.onnx_utils import ORT_TO_NP_TYPE, OnnxRuntimeModel
 
 from model.edgestyle_multicontrolnet import EdgeStyleMultiControlNetModel
 from model.controllora import ControlLoRAModel, CachedControlNetModel
@@ -19,8 +22,11 @@ CONTROLNET_PATTERN = [0, None, 1, None, 1, None]
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
 class OnnxUNetAndControlnets(ModelMixin):
-    def __init__(self, unet: UNet2DConditionModel, controlnet: EdgeStyleMultiControlNetModel):
+    def __init__(
+        self, unet: UNet2DConditionModel, controlnet: EdgeStyleMultiControlNetModel
+    ):
         super().__init__()
         self.unet = unet
         self.controlnet = controlnet
@@ -50,7 +56,7 @@ class OnnxUNetAndControlnets(ModelMixin):
         noise_pred = self.unet(
             sample,
             timestep,
-            encoder_hidden_states=encoder_hidden_states,            
+            encoder_hidden_states=encoder_hidden_states,
             down_block_additional_residuals=down_block_res_samples,
             mid_block_additional_residual=mid_block_res_sample,
             return_dict=False,
@@ -84,13 +90,15 @@ def export_unet():
 
     model = OnnxUNetAndControlnets(unet, controlnet)
 
-    onnx_model_path = os.path.join(
-        ONNX_MODEL_NAME_OR_PATH, "unet", "model.onnx"
-    )
+    # set all parameters to not require gradients
+    for param in model.parameters():
+        param.requires_grad = False
+
+    onnx_model_path = os.path.join(ONNX_MODEL_NAME_OR_PATH, "unet", "model.onnx")
     os.makedirs(onnx_model_path.replace("model.onnx", ""), exist_ok=True)
 
     latent_model_input = torch.randn(2, 4, 64, 64)
-    timesteps = torch.randint(0, 1, (2,)).long()
+    timesteps = torch.randint(0, 1, (1,)).long()
     prompt_embeds = torch.randn(2, 77, 768)
 
     conditioning_scale = torch.randn(6)
@@ -115,12 +123,10 @@ def export_unet():
         image_5,
     )
 
-    # model = model.to(DEVICE)
-    # dummy_input = tuple(x.to(DEVICE) for x in dummy_input)
+    model = model.to(DEVICE)
+    dummy_input = tuple(x.to(DEVICE) for x in dummy_input)
 
-    # out = model(*dummy_input)
-
-    # print(out.shape)
+    predicted_noise_torch = model(*dummy_input)
 
     # Conversion to ONNX
     torch.onnx.export(
@@ -139,15 +145,38 @@ def export_unet():
             "image_3",
             "image_4",
             "image_5",
-
         ],
         output_names=["output"],
+        training=torch.onnx.TrainingMode.EVAL,
         # verbose=True,
-        # opset_version=15,
+        opset_version=17,
+    )
+
+    onnx_unet = OnnxRuntimeModel.from_pretrained(
+        onnx_model_path.replace("model.onnx", "")
+    )
+    predicted_noise_onnx = onnx_unet(
+        sample=latent_model_input,
+        timestep=timesteps,
+        encoder_hidden_states=prompt_embeds,
+        conditioning_scale=conditioning_scale,
+        image_0=image_0,
+        image_1=image_1,
+        image_2=image_2,
+        image_3=image_3,
+        image_4=image_4,
+        image_5=image_5,
+    )[0]
+
+    # compare the output error predicted_noise_torch is FloatTensor and predicted_noise_onnx is numpy array
+    np.testing.assert_allclose(
+        predicted_noise_torch.detach().cpu().numpy(),
+        predicted_noise_onnx,
+        rtol=1e-03,
+        atol=1e-05,
     )
 
     # onnx.checker.check_model(onnx_model_path)
-
 
     # latent_model_input = torch.randn(2, 4, 64, 64)
     # timesteps = torch.randint(0, 1, (1,)).long()
