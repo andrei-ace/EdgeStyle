@@ -1,5 +1,6 @@
 from typing import Dict, Any, Tuple, Union, Optional
 
+import gc
 import os
 import torch
 import onnx
@@ -13,14 +14,18 @@ from diffusers.pipelines.onnx_utils import ORT_TO_NP_TYPE, OnnxRuntimeModel
 from model.edgestyle_multicontrolnet import EdgeStyleMultiControlNetModel
 from model.controllora import ControlLoRAModel, CachedControlNetModel
 
+from optimum.onnx.utils import check_model_uses_external_data
+
+import onnx_graphsurgeon as gs
+
 PRETRAINED_MODEL_NAME_OR_PATH = "./models/Realistic_Vision_V5.1_noVAE"
 PRETRAINED_VAE_NAME_OR_PATH = "./models/sd-vae-ft-mse"
 PRETRAINED_OPENPOSE_NAME_OR_PATH = "./models/control_v11p_sd15_openpose"
 CONTROLNET_MODEL_NAME_OR_PATH = "./models/EdgeStyle/controlnet"
-ONNX_MODEL_NAME_OR_PATH = "./models/EdgeStyle/unet"
+ONNX_MODEL_NAME_OR_PATH = "./models/EdgeStyle/"
 CONTROLNET_PATTERN = [0, None, 1, None, 1, None]
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class OnnxUNetAndControlnets(ModelMixin):
@@ -64,7 +69,6 @@ class OnnxUNetAndControlnets(ModelMixin):
 
         return noise_pred
 
-
 @torch.no_grad()
 def export_unet():
     vae = AutoencoderKL.from_pretrained(PRETRAINED_VAE_NAME_OR_PATH)
@@ -94,11 +98,12 @@ def export_unet():
     for param in model.parameters():
         param.requires_grad = False
 
-    onnx_model_path = os.path.join(ONNX_MODEL_NAME_OR_PATH, "unet", "model.onnx")
-    os.makedirs(onnx_model_path.replace("model.onnx", ""), exist_ok=True)
+    model = model.eval()
+
+    model = model.to(device)
 
     latent_model_input = torch.randn(2, 4, 64, 64)
-    timesteps = torch.randint(0, 1, (1,)).long()
+    timesteps = torch.randint(0, 1, (1,))
     prompt_embeds = torch.randn(2, 77, 768)
 
     conditioning_scale = torch.randn(6)
@@ -121,40 +126,125 @@ def export_unet():
         image_3,
         image_4,
         image_5,
-    )
-
-    model = model.to(DEVICE)
-    dummy_input = tuple(x.to(DEVICE) for x in dummy_input)
+    )    
+    dummy_input = tuple(x.to(device) for x in dummy_input)
 
     predicted_noise_torch = model(*dummy_input)
 
-    # Conversion to ONNX
-    torch.onnx.export(
-        model,
-        dummy_input,
-        onnx_model_path,
-        export_params=True,
-        input_names=[
-            "sample",
-            "timestep",
-            "encoder_hidden_states",
-            "conditioning_scale",
-            "image_0",
-            "image_1",
-            "image_2",
-            "image_3",
-            "image_4",
-            "image_5",
-        ],
-        output_names=["output"],
-        training=torch.onnx.TrainingMode.EVAL,
-        # verbose=True,
-        opset_version=17,
-    )
+    onnx_model_path = os.path.join(ONNX_MODEL_NAME_OR_PATH, 'unet', "model.onnx")
+    onnx_model_dir = os.path.join(onnx_model_path.replace("model.onnx", ""))
+                                                  
+    os.makedirs(onnx_model_dir, exist_ok=True)
 
-    onnx_unet = OnnxRuntimeModel.from_pretrained(
-        onnx_model_path.replace("model.onnx", "")
-    )
+    print('exporting onnx model for unet and controlnets...') 
+
+    # Conversion to ONNX
+    # torch.onnx.export(
+    #     model,
+    #     dummy_input,
+    #     onnx_model_path,
+    #     export_params=True,
+    #     input_names=[
+    #         "sample",
+    #         "timestep",
+    #         "encoder_hidden_states",
+    #         "conditioning_scale",
+    #         "image_0",
+    #         "image_1",
+    #         "image_2",
+    #         "image_3",
+    #         "image_4",
+    #         "image_5",
+    #     ],
+    #     output_names=["output"],
+    #     dynamic_axes={
+    #         "sample": {0: "batch_size"},  # variable length axes
+    #         "encoder_hidden_states": {0: "batch_size"},            
+    #         "image_0": {0: "batch_size"},
+    #         "image_1": {0: "batch_size"},
+    #         "image_2": {0: "batch_size"},
+    #         "image_3": {0: "batch_size"},
+    #         "image_4": {0: "batch_size"},
+    #         "image_5": {0: "batch_size"},
+    #         "output": {0: "batch_size"},
+    #     },
+    #     training=torch.onnx.TrainingMode.EVAL,
+    #     do_constant_folding=True,
+    #     # verbose=True,
+    #     opset_version=17,
+    # )
+
+    # # check if external data was exported
+    # onnx_model = onnx.load(onnx_model_path, load_external_data=False)
+    # model_uses_external_data = check_model_uses_external_data(onnx_model)
+
+    # if model_uses_external_data:
+    #     # try free model memory
+    #     del model
+    #     del onnx_model
+    #     gc.collect()
+    #     if device.type == "cuda" and torch.cuda.is_available():
+    #         torch.cuda.empty_cache()
+
+    #     onnx_model = onnx.load(
+    #         str(onnx_model_path), load_external_data=True
+    #     )  # this will probably be too memory heavy for large models
+    #     onnx.save(
+    #         onnx_model,
+    #         str(onnx_model_path),
+    #         save_as_external_data=True,
+    #         all_tensors_to_one_file=True,
+    #         location='model.onnx' + "_data",
+    #         size_threshold=1024,
+    #         convert_attribute=True,
+    #     )
+
+    #     del onnx_model
+    #     gc.collect()import onnx_graphsurgeon as gs
+    #     if device.type == "cuda" and torch.cuda.is_available():
+    #         torch.cuda.empty_cache()
+
+    #     # delete all files except the model.onnx and onnx external data
+    #     for file in os.listdir(onnx_model_dir):
+    #         if file != "model.onnx" and file != "model.onnx" + "_data":
+    #             os.remove(os.path.join(onnx_model_dir, file))
+        
+    print('running shape inference script...')
+
+    graph = gs.import_onnx(onnx.load(onnx_model_path))
+    tensors = graph.tensors()
+
+    for tensor_key in tensors.keys():
+        if '/controlnet/multi_controlnet_down_blocks' in tensor_key:
+            print(tensors[tensor_key])
+    
+
+    # os.rename(f"{onnx_model_path}", f"{onnx_model_path}-no-infer")
+
+    # run shape inference script
+    # os.system(
+    #     f"python -m onnxruntime.tools.symbolic_shape_infer "
+    #     f"--input {onnx_model_path} "
+    #     f"--output {onnx_model_path}-infer "
+    #     f"--auto_merge "
+    #     # f"--save_as_external_data "
+    #     # f"--all_tensors_to_one_file "
+    #     # f"--external_data_location model.onnx-infer_data "
+    #     # f"--external_data_size_threshold 1024 "
+    #     f"--verbose 3"
+    # )
+    
+    # # delete old onnx model and data and rename new onnx model
+    # # os.remove(onnx_model_path)
+    # # os.remove(onnx_model_path + "_data")
+    # os.rename(f"{onnx_model_path}-infer", onnx_model_path)
+    
+    # print('shape inference script completed...')
+
+    print('exported onnx model for unet and controlnets...')
+    print('checking onnx model...')    
+
+    onnx_unet = OnnxRuntimeModel.from_pretrained(onnx_model_dir, provider="TensorrtExecutionProvider")
     predicted_noise_onnx = onnx_unet(
         sample=latent_model_input,
         timestep=timesteps,
@@ -167,6 +257,7 @@ def export_unet():
         image_4=image_4,
         image_5=image_5,
     )[0]
+    print('checking how close the output is...')
 
     # compare the output error predicted_noise_torch is FloatTensor and predicted_noise_onnx is numpy array
     np.testing.assert_allclose(
@@ -175,97 +266,7 @@ def export_unet():
         rtol=1e-03,
         atol=1e-05,
     )
-
-    # onnx.checker.check_model(onnx_model_path)
-
-    # latent_model_input = torch.randn(2, 4, 64, 64)
-    # timesteps = torch.randint(0, 1, (1,)).long()
-    # prompt_embeds = torch.randn(2, 77, 768)
-    # down_block_res_samples = [
-    #     torch.randn(2, 320, 64, 64),
-    #     torch.randn(2, 320, 64, 64),
-    #     torch.randn(2, 320, 64, 64),
-    #     torch.randn(2, 320, 32, 32),
-    #     torch.randn(2, 640, 32, 32),
-    #     torch.randn(2, 640, 32, 32),
-    #     torch.randn(2, 640, 16, 16),
-    #     torch.randn(2, 1280, 16, 16),
-    #     torch.randn(2, 1280, 16, 16),
-    #     torch.randn(2, 1280, 8, 8),
-    #     torch.randn(2, 1280, 8, 8),
-    #     torch.randn(2, 1280, 8, 8),
-    # ]
-    # mid_block_res_sample = torch.randn(2, 1280, 8, 8)
-
-    # dummy_input = (
-    #     latent_model_input,
-    #     timesteps,
-    #     prompt_embeds,
-    #     None,
-    #     None,
-    #     None,
-    #     None,
-    #     None,
-    #     *down_block_res_samples,
-    #     mid_block_res_sample,
-    #     None,
-    #     None,
-    #     False,
-    # )
-
-    # onnx_model_path = os.path.join(
-    #     UNET_PRETRAINED_MODEL_NAME_OR_PATH + "-onnx", "unet", "model.onnx"
-    # )
-
-    # os.makedirs(onnx_model_path.replace("model.onnx", ""), exist_ok=True)
-
-    # # Conversion to ONNX
-    # torch.onnx.export(
-    #     unet,
-    #     dummy_input,
-    #     onnx_model_path,
-    #     export_params=True,
-    #     input_names=[
-    #         "sample",
-    #         "timestep",
-    #         "encoder_hidden_states",
-    #         "down_block_additional_residuals_0",
-    #         "down_block_additional_residuals_1",
-    #         "down_block_additional_residuals_2",
-    #         "down_block_additional_residuals_3",
-    #         "down_block_additional_residuals_4",
-    #         "down_block_additional_residuals_5",
-    #         "down_block_additional_residuals_6",
-    #         "down_block_additional_residuals_7",
-    #         "down_block_additional_residuals_8",
-    #         "down_block_additional_residuals_9",
-    #         "down_block_additional_residuals_10",
-    #         "down_block_additional_residuals_11",
-    #         "mid_block_additional_residual",
-    #     ],
-    #     output_names=["output"],
-    #     # dynamic_axes={
-    #     #     "sample": {0: "batch_size"},  # variable length axes
-    #     #     "timestep": {0: "batch_size"},
-    #     #     "encoder_hidden_states": {0: "batch_size"},
-    #     #     "down_block_additional_residuals_0": {0: "batch_size"},
-    #     #     "down_block_additional_residuals_1": {0: "batch_size"},
-    #     #     "down_block_additional_residuals_2": {0: "batch_size"},
-    #     #     "down_block_additional_residuals_3": {0: "batch_size"},
-    #     #     "down_block_additional_residuals_4": {0: "batch_size"},
-    #     #     "down_block_additional_residuals_5": {0: "batch_size"},
-    #     #     "down_block_additional_residuals_6": {0: "batch_size"},
-    #     #     "down_block_additional_residuals_7": {0: "batch_size"},
-    #     #     "down_block_additional_residuals_8": {0: "batch_size"},
-    #     #     "down_block_additional_residuals_9": {0: "batch_size"},
-    #     #     "down_block_additional_residuals_10": {0: "batch_size"},
-    #     #     "down_block_additional_residuals_11": {0: "batch_size"},
-    #     #     "mid_block_additional_residual": {0: "batch_size"},
-    #     #     "output": {0: "batch_size"},
-    #     # },
-    # )
-
-    # onnx.checker.check_model(onnx_model_path)
+    print('exported onnx model for unet and controlnets is correct...')
 
 
 @torch.no_grad()
@@ -280,10 +281,11 @@ def export_vae_encoder_decoder():
     dummy_input = latent_model_input
 
     onnx_model_path = os.path.join(
-        PRETRAINED_VAE_NAME_OR_PATH + "-onnx", "encoder", "model.onnx"
+        ONNX_MODEL_NAME_OR_PATH, "encoder", "model.onnx"
     )
+    onnx_model_dir = os.path.join(onnx_model_path.replace("model.onnx", ""))
 
-    os.makedirs(onnx_model_path.replace("model.onnx", ""), exist_ok=True)
+    os.makedirs(onnx_model_dir, exist_ok=True)
 
     torch.onnx.export(
         vae_encoder,
@@ -307,10 +309,11 @@ def export_vae_encoder_decoder():
     dummy_input = latent_model_input
 
     onnx_model_path = os.path.join(
-        PRETRAINED_VAE_NAME_OR_PATH + "-onnx", "decoder", "model.onnx"
+        ONNX_MODEL_NAME_OR_PATH, "decoder", "model.onnx"
     )
+    onnx_model_dir = os.path.join(onnx_model_path.replace("model.onnx", ""))
 
-    os.makedirs(onnx_model_path.replace("model.onnx", ""), exist_ok=True)
+    os.makedirs(onnx_model_dir, exist_ok=True)
 
     torch.onnx.export(
         vae_decoder,

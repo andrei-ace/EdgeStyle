@@ -9,7 +9,9 @@ pandas
 controlnet-aux 
 tqdm
 torchpack
-onnx
+onnx==1.14.0
+onnxruntime-gpu==1.15.1
+optimum
 onnxsim
 segment_anything
 monai
