@@ -1,5 +1,8 @@
 from typing import Dict, Any, Tuple, Union, Optional
 
+from fvcore.nn import FlopCountAnalysis
+from torchinfo import summary
+
 import gc
 import os
 import torch
@@ -115,7 +118,7 @@ def export_unet():
             net.tie_weights(unet)
             # net.fuse_lora()
 
-    model = OnnxUNetAndControlnets(unet, controlnet)
+    model = OnnxUNetAndControlnets(unet, controlnet)    
 
     # set all parameters to not require gradients
     for param in model.parameters():
@@ -160,6 +163,12 @@ def export_unet():
     dummy_input = tuple(x.to(device) for x in dummy_input)
 
     predicted_noise_torch = model(*dummy_input)
+
+    flops = FlopCountAnalysis(model, dummy_input)
+    print(f"fvcore FLOPs: {flops.total()/1e9:.2f} GFLOPs")
+
+    statistics = summary(model, input_data=dummy_input, verbose=0)
+    print(f"torchinfo FLOPs: {statistics.total_mult_adds/1e9:.2f} GFLOPs")
 
     onnx_model_path = os.path.join(ONNX_MODEL_NAME_OR_PATH, 'unet', "model.onnx")
     onnx_model_dir = os.path.join(onnx_model_path.replace("/model.onnx", ""))

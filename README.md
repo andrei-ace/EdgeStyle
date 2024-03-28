@@ -12,7 +12,7 @@ pip install -r requirements.txt
 ```
 Or alternatively
 ```
-pip install lightning tensorboard torch-tb-profiler opencv-python pandas  controlnet-aux tqdm  torchpack onnx onnxsim segment_anything monai  prodigyopt torchmetrics[multimodal] gradio
+pip install lightning tensorboard torch-tb-profiler opencv-python pandas  controlnet-aux tqdm  torchpack onnx onnxsim segment_anything monai  prodigyopt torchmetrics[multimodal] gradio fvcore torchinfo
 
 pip install datasets transformers accelerate diffusers
 ```
