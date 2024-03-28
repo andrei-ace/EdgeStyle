@@ -218,6 +218,27 @@ optimum-cli export onnx -m ./clip-vit-large-patch14/ --task image-to-text clip-v
 optimum-cli export onnx -m ./Realistic_Vision_V5.1_noVAE/ --task stable-diffusion Realistic_Vision_V5.1_noVAE-onnx
 ```
 
+
+```
+python export_onnx.py
+```
+Large error
+```
+AssertionError: 
+Not equal to tolerance rtol=0.001, atol=1e-05
+
+Mismatched elements: 5841 / 32768 (17.8%)
+Max absolute difference: 0.00092185
+Max relative difference: 103.04526
+ x: array([[[[ 1.31208 , -1.244555,  1.00645 , ...,  0.53056 , -0.263657,
+           0.577149],
+         [-0.548291,  0.613406,  0.165211, ...,  0.237761, -0.388499,...
+ y: array([[[[ 1.311924, -1.244697,  1.006474, ...,  0.530382, -0.263636,
+           0.577266],
+         [-0.548179,  0.613441,  0.165163, ...,  0.237911, -0.388577,...
+```
+
+
 ```
 python symbolic_shape_infer.py --input ./models/EdgeStyle/unet/model.onnx --output models/EdgeStyle/unet/model-shape-infer.onnx --auto_merge
 

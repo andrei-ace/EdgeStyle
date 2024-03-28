@@ -4,7 +4,6 @@ import gc
 import os
 import torch
 import onnx
-
 import numpy as np
 
 from diffusers import UNet2DConditionModel, AutoencoderKL
@@ -16,7 +15,9 @@ from model.controllora import ControlLoRAModel, CachedControlNetModel
 
 from optimum.onnx.utils import check_model_uses_external_data
 
-import onnx_graphsurgeon as gs
+# from onnx import version_converter, helper
+# from onnxruntime.transformers.shape_infer_helper import SymbolicShapeInferenceHelper
+# import onnx_graphsurgeon as gs
 
 PRETRAINED_MODEL_NAME_OR_PATH = "./models/Realistic_Vision_V5.1_noVAE"
 PRETRAINED_VAE_NAME_OR_PATH = "./models/sd-vae-ft-mse"
@@ -69,6 +70,24 @@ class OnnxUNetAndControlnets(ModelMixin):
 
         return noise_pred
 
+
+def print_tensor(tensor):
+    name = tensor.name
+    tensor_type = tensor.type.tensor_type
+    data_type = onnx.TensorProto.DataType.keys()[tensor_type.elem_type]
+    shape = [
+        dim.dim_param if dim.dim_param else dim.dim_value
+        for dim in tensor_type.shape.dim
+    ]
+    print(f"{name} = {data_type} {shape}")
+
+
+def print_io(model):
+    for tensor in model.graph.input:
+        print_tensor(tensor)
+    for tensor in model.graph.output:
+        print_tensor(tensor)
+
 @torch.no_grad()
 def export_unet():
     vae = AutoencoderKL.from_pretrained(PRETRAINED_VAE_NAME_OR_PATH)
@@ -76,10 +95,12 @@ def export_unet():
     unet = UNet2DConditionModel.from_pretrained(
         PRETRAINED_MODEL_NAME_OR_PATH,
         subfolder="unet",
-        torch_dtype=torch.float16,
+        # torch_dtype=torch.float16,
     )
 
-    openpose = CachedControlNetModel.from_pretrained(PRETRAINED_OPENPOSE_NAME_OR_PATH, torch_dtype=torch.float16,)
+    openpose = CachedControlNetModel.from_pretrained(PRETRAINED_OPENPOSE_NAME_OR_PATH,
+                                                    #   torch_dtype=torch.float16,
+                                                      )
 
     controlnet = EdgeStyleMultiControlNetModel.from_pretrained(
         CONTROLNET_MODEL_NAME_OR_PATH,
@@ -87,7 +108,7 @@ def export_unet():
         controlnet_class=ControlLoRAModel,
         load_pattern=CONTROLNET_PATTERN,
         static_controlnets=[None, openpose, None, openpose, None, openpose],
-        torch_dtype=torch.float16,
+        # torch_dtype=torch.float16,
     )
     for net in controlnet.nets:
         if net is not openpose:
@@ -104,18 +125,25 @@ def export_unet():
 
     model = model.to(device)
 
-    latent_model_input = torch.randn(2, 4, 64, 64).to(dtype=torch.float16)
+    latent_model_input = torch.randn(2, 4, 64, 64)
     timesteps = torch.randint(0, 1, (1,)).long()
-    prompt_embeds = torch.randn(2, 77, 768).to(dtype=torch.float16)
+    timesteps = timesteps.repeat(2)
+    prompt_embeds = torch.randn(2, 77, 768)
 
     conditioning_scale = torch.randn(6)
 
-    image_0 = torch.randn(2, 320, 64, 64).to(dtype=torch.float16)
-    image_1 = torch.randn(2, 3, 512, 512).to(dtype=torch.float16)
-    image_2 = torch.randn(2, 320, 64, 64).to(dtype=torch.float16)
-    image_3 = torch.randn(2, 3, 512, 512).to(dtype=torch.float16)
-    image_4 = torch.randn(2, 320, 64, 64).to(dtype=torch.float16)
-    image_5 = torch.randn(2, 3, 512, 512).to(dtype=torch.float16)
+    image_0 = torch.randn(1, 320, 64, 64)
+    image_0 = image_0.repeat(2, 1, 1, 1)
+    image_1 = torch.randn(1, 3, 512, 512)
+    image_1 = image_1.repeat(2, 1, 1, 1)
+    image_2 = torch.randn(1, 320, 64, 64)
+    image_2 = image_2.repeat(2, 1, 1, 1)
+    image_3 = torch.randn(1, 3, 512, 512)
+    image_3 = image_3.repeat(2, 1, 1, 1)
+    image_4 = torch.randn(1, 320, 64, 64)
+    image_4 = image_4.repeat(2, 1, 1, 1)
+    image_5 = torch.randn(1, 3, 512, 512)
+    image_5 = image_5.repeat(2, 1, 1, 1)
 
     dummy_input = (
         latent_model_input,
@@ -134,9 +162,10 @@ def export_unet():
     predicted_noise_torch = model(*dummy_input)
 
     onnx_model_path = os.path.join(ONNX_MODEL_NAME_OR_PATH, 'unet', "model.onnx")
-    onnx_model_dir = os.path.join(onnx_model_path.replace("model.onnx", ""))
+    onnx_model_dir = os.path.join(onnx_model_path.replace("/model.onnx", ""))
                                                   
     os.makedirs(onnx_model_dir, exist_ok=True)
+    # os.makedirs(onnx_model_dir + '-infer', exist_ok=True)
 
     print('exporting onnx model for unet and controlnets...') 
 
@@ -161,7 +190,8 @@ def export_unet():
         output_names=["output"],
         dynamic_axes={
             "sample": {0: "batch_size"},  # variable length axes
-            "encoder_hidden_states": {0: "batch_size"},            
+            "timestep": {0: "batch_size"},          
+            "encoder_hidden_states": {0: "batch_size"},
             "image_0": {0: "batch_size"},
             "image_1": {0: "batch_size"},
             "image_2": {0: "batch_size"},
@@ -170,7 +200,7 @@ def export_unet():
             "image_5": {0: "batch_size"},
             "output": {0: "batch_size"},
         },
-        training=torch.onnx.TrainingMode.EVAL,
+        # training=torch.onnx.TrainingMode.EVAL,
         do_constant_folding=True,
         # verbose=True,
         opset_version=17,
@@ -193,7 +223,7 @@ def export_unet():
         )  # this will probably be too memory heavy for large models
         onnx.save(
             onnx_model,
-            str(onnx_model_path),
+            onnx_model_path,
             save_as_external_data=True,
             all_tensors_to_one_file=True,
             location='model.onnx' + "_data",
@@ -211,16 +241,32 @@ def export_unet():
             if file != "model.onnx" and file != "model.onnx" + "_data":
                 os.remove(os.path.join(onnx_model_dir, file))
         
-    print('running shape inference script...')
+    # print('running shape inference script...')
 
-    graph = gs.import_onnx(onnx.load(onnx_model_path))
-    tensors = graph.tensors()
+    # # Print input/output shapes
+    # print("\n*** BEFORE ***")
+    # onnx_model = onnx.load(onnx_model_path, load_external_data=True)
+    # print_io(onnx_model)    
 
-    for tensor_key in tensors.keys():
-        if '/controlnet/multi_controlnet_down_blocks' in tensor_key:
-            print(tensors[tensor_key])
+    # # Run symbolic shape inference
+    # shape_infer_helper = SymbolicShapeInferenceHelper(onnx_model, verbose=3, auto_merge=True, guess_output_rank=False)
+    # all_infered = shape_infer_helper.infer(dynamic_axis_mapping = {"batch_size": 2})
+    # print(f"Shape inference completed: {all_infered}")
+    # onnx_model = shape_infer_helper.model_
+
+    # # Print input/output shapes again
+    # print("\n\n*** AFTER ***")
+    # print_io(onnx_model)
+
+    # # save the model
+    # onnx.save(onnx_model, 
+    #           onnx_model_dir + '-infer/model.onnx', 
+    #           save_as_external_data=True, 
+    #           all_tensors_to_one_file=True, 
+    #           location='model.onnx' + "_data", 
+    #           size_threshold=1024, 
+    #           convert_attribute=True)
     
-
     # os.rename(f"{onnx_model_path}", f"{onnx_model_path}-no-infer")
 
     # run shape inference script
@@ -246,7 +292,16 @@ def export_unet():
     print('exported onnx model for unet and controlnets...')
     print('checking onnx model...')    
 
-    onnx_unet = OnnxRuntimeModel.from_pretrained(onnx_model_dir, provider="TensorrtExecutionProvider")
+    # graph = gs.import_onnx(onnx.load(onnx_model_dir + '-infer/model.onnx'))
+    # tensors = graph.tensors()
+
+    # for tensor_key in tensors.keys():
+    #     if '/controlnet/multi_controlnet_down_blocks' in tensor_key:
+    #         print(tensors[tensor_key])
+
+    onnx.checker.check_model(onnx_model_path, full_check=True)
+
+    onnx_unet = OnnxRuntimeModel.from_pretrained(onnx_model_dir, provider="CPUExecutionProvider")
     predicted_noise_onnx = onnx_unet(
         sample=latent_model_input,
         timestep=timesteps,

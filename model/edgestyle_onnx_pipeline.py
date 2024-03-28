@@ -239,6 +239,8 @@ class EdgeStyleOnnxStableDiffusionControlNetPipeline(OnnxStableDiffusionPipeline
             )
             latent_model_input = latent_model_input.cpu().numpy()
 
+            # TODO work in progress
+
             down_block_res_samples = [
                 torch.randn(2, 320, 64, 64).cpu().numpy(),
                 torch.randn(2, 320, 64, 64).cpu().numpy(),
