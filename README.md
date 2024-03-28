@@ -220,4 +220,6 @@ optimum-cli export onnx -m ./Realistic_Vision_V5.1_noVAE/ --task stable-diffusio
 
 ```
 python symbolic_shape_infer.py --input ./models/EdgeStyle/unet/model.onnx --output models/EdgeStyle/unet/model-shape-infer.onnx --auto_merge
+
+python3 -m onnxruntime.tools.symbolic_shape_infer --input ./models/EdgeStyle/unet/model.onnx --output ./models/EdgeStyle/unet/model.onnx-infer --verbose 3 --save_as_external_data --external_data_size_threshold 1024
 ```

@@ -76,9 +76,10 @@ def export_unet():
     unet = UNet2DConditionModel.from_pretrained(
         PRETRAINED_MODEL_NAME_OR_PATH,
         subfolder="unet",
+        torch_dtype=torch.float16,
     )
 
-    openpose = CachedControlNetModel.from_pretrained(PRETRAINED_OPENPOSE_NAME_OR_PATH)
+    openpose = CachedControlNetModel.from_pretrained(PRETRAINED_OPENPOSE_NAME_OR_PATH, torch_dtype=torch.float16,)
 
     controlnet = EdgeStyleMultiControlNetModel.from_pretrained(
         CONTROLNET_MODEL_NAME_OR_PATH,
@@ -86,6 +87,7 @@ def export_unet():
         controlnet_class=ControlLoRAModel,
         load_pattern=CONTROLNET_PATTERN,
         static_controlnets=[None, openpose, None, openpose, None, openpose],
+        torch_dtype=torch.float16,
     )
     for net in controlnet.nets:
         if net is not openpose:
@@ -102,18 +104,18 @@ def export_unet():
 
     model = model.to(device)
 
-    latent_model_input = torch.randn(2, 4, 64, 64)
-    timesteps = torch.randint(0, 1, (1,))
-    prompt_embeds = torch.randn(2, 77, 768)
+    latent_model_input = torch.randn(2, 4, 64, 64).to(dtype=torch.float16)
+    timesteps = torch.randint(0, 1, (1,)).long()
+    prompt_embeds = torch.randn(2, 77, 768).to(dtype=torch.float16)
 
     conditioning_scale = torch.randn(6)
 
-    image_0 = torch.randn(2, 320, 64, 64)
-    image_1 = torch.randn(2, 3, 512, 512)
-    image_2 = torch.randn(2, 320, 64, 64)
-    image_3 = torch.randn(2, 3, 512, 512)
-    image_4 = torch.randn(2, 320, 64, 64)
-    image_5 = torch.randn(2, 3, 512, 512)
+    image_0 = torch.randn(2, 320, 64, 64).to(dtype=torch.float16)
+    image_1 = torch.randn(2, 3, 512, 512).to(dtype=torch.float16)
+    image_2 = torch.randn(2, 320, 64, 64).to(dtype=torch.float16)
+    image_3 = torch.randn(2, 3, 512, 512).to(dtype=torch.float16)
+    image_4 = torch.randn(2, 320, 64, 64).to(dtype=torch.float16)
+    image_5 = torch.randn(2, 3, 512, 512).to(dtype=torch.float16)
 
     dummy_input = (
         latent_model_input,
@@ -139,75 +141,75 @@ def export_unet():
     print('exporting onnx model for unet and controlnets...') 
 
     # Conversion to ONNX
-    # torch.onnx.export(
-    #     model,
-    #     dummy_input,
-    #     onnx_model_path,
-    #     export_params=True,
-    #     input_names=[
-    #         "sample",
-    #         "timestep",
-    #         "encoder_hidden_states",
-    #         "conditioning_scale",
-    #         "image_0",
-    #         "image_1",
-    #         "image_2",
-    #         "image_3",
-    #         "image_4",
-    #         "image_5",
-    #     ],
-    #     output_names=["output"],
-    #     dynamic_axes={
-    #         "sample": {0: "batch_size"},  # variable length axes
-    #         "encoder_hidden_states": {0: "batch_size"},            
-    #         "image_0": {0: "batch_size"},
-    #         "image_1": {0: "batch_size"},
-    #         "image_2": {0: "batch_size"},
-    #         "image_3": {0: "batch_size"},
-    #         "image_4": {0: "batch_size"},
-    #         "image_5": {0: "batch_size"},
-    #         "output": {0: "batch_size"},
-    #     },
-    #     training=torch.onnx.TrainingMode.EVAL,
-    #     do_constant_folding=True,
-    #     # verbose=True,
-    #     opset_version=17,
-    # )
+    torch.onnx.export(
+        model,
+        dummy_input,
+        onnx_model_path,
+        export_params=True,
+        input_names=[
+            "sample",
+            "timestep",
+            "encoder_hidden_states",
+            "conditioning_scale",
+            "image_0",
+            "image_1",
+            "image_2",
+            "image_3",
+            "image_4",
+            "image_5",
+        ],
+        output_names=["output"],
+        dynamic_axes={
+            "sample": {0: "batch_size"},  # variable length axes
+            "encoder_hidden_states": {0: "batch_size"},            
+            "image_0": {0: "batch_size"},
+            "image_1": {0: "batch_size"},
+            "image_2": {0: "batch_size"},
+            "image_3": {0: "batch_size"},
+            "image_4": {0: "batch_size"},
+            "image_5": {0: "batch_size"},
+            "output": {0: "batch_size"},
+        },
+        training=torch.onnx.TrainingMode.EVAL,
+        do_constant_folding=True,
+        # verbose=True,
+        opset_version=17,
+    )
 
-    # # check if external data was exported
-    # onnx_model = onnx.load(onnx_model_path, load_external_data=False)
-    # model_uses_external_data = check_model_uses_external_data(onnx_model)
+    # check if external data was exported
+    onnx_model = onnx.load(onnx_model_path, load_external_data=False)
+    model_uses_external_data = check_model_uses_external_data(onnx_model)
 
-    # if model_uses_external_data:
-    #     # try free model memory
-    #     del model
-    #     del onnx_model
-    #     gc.collect()
-    #     if device.type == "cuda" and torch.cuda.is_available():
-    #         torch.cuda.empty_cache()
+    if model_uses_external_data:
+        # try free model memory
+        del model
+        del onnx_model
+        gc.collect()
+        if device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
-    #     onnx_model = onnx.load(
-    #         str(onnx_model_path), load_external_data=True
-    #     )  # this will probably be too memory heavy for large models
-    #     onnx.save(
-    #         onnx_model,
-    #         str(onnx_model_path),
-    #         save_as_external_data=True,
-    #         all_tensors_to_one_file=True,
-    #         location='model.onnx' + "_data",
-    #         size_threshold=1024,
-    #         convert_attribute=True,
-    #     )
+        onnx_model = onnx.load(
+            str(onnx_model_path), load_external_data=True
+        )  # this will probably be too memory heavy for large models
+        onnx.save(
+            onnx_model,
+            str(onnx_model_path),
+            save_as_external_data=True,
+            all_tensors_to_one_file=True,
+            location='model.onnx' + "_data",
+            size_threshold=1024,
+            convert_attribute=True,
+        )
 
-    #     del onnx_model
-    #     gc.collect()import onnx_graphsurgeon as gs
-    #     if device.type == "cuda" and torch.cuda.is_available():
-    #         torch.cuda.empty_cache()
+        del onnx_model
+        gc.collect()
+        if device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
-    #     # delete all files except the model.onnx and onnx external data
-    #     for file in os.listdir(onnx_model_dir):
-    #         if file != "model.onnx" and file != "model.onnx" + "_data":
-    #             os.remove(os.path.join(onnx_model_dir, file))
+        # delete all files except the model.onnx and onnx external data
+        for file in os.listdir(onnx_model_dir):
+            if file != "model.onnx" and file != "model.onnx" + "_data":
+                os.remove(os.path.join(onnx_model_dir, file))
         
     print('running shape inference script...')
 
