@@ -153,6 +153,13 @@ python test_text2image_pretrained_openpose.py \
 ![21.5k](docs/pretrained_openpose_21.5k.jpg)
 
 
+### 
+```
+tensorboard --logdir models/output_text2image_pretrained_openpose/logs/
+
+[13:31:12<00:00, 24.34s/it, loss=0.00664, lr=1]
+```
+
 # Running on jetson 
 
 ## Create local environment (Optional)
