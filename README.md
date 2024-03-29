@@ -169,7 +169,7 @@ cat /etc/nv_tegra_release
 # R35 (release), REVISION: 2.1
 ```
 
-Install pytorch and pyvision ![PyTorch for Jetson](https://forums.developer.nvidia.com/t/pytorch-for-jetson/72048)
+Install pytorch and pyvision [PyTorch for Jetson](https://forums.developer.nvidia.com/t/pytorch-for-jetson/72048)
 
 ```
 sudo apt-get install libssl-dev
@@ -181,7 +181,7 @@ make -j$(nproc)
 sudo make install
 ```
 
-Install onnxruntime_gpu ![Jetson Zoo](https://elinux.org/Jetson_Zoo)
+Install onnxruntime_gpu [Jetson Zoo](https://elinux.org/Jetson_Zoo)
 ```
 wget https://nvidia.box.com/shared/static/mvdcltm9ewdy2d5nurkiqorofz1s53ww.whl -O onnxruntime_gpu-1.15.1-cp38-cp38-linux_aarch64.whl
 pip3 install onnxruntime_gpu-1.15.1-cp38-cp38-linux_aarch64.whl
@@ -193,7 +193,7 @@ pip3 install --upgrade setuptools
 pip3 install -r requirements-jetson.txt
 ```
 
-Make sure you have git lfs installed !(git lfs)[https://git-lfs.com/]
+Make sure you have git lfs installed [git lfs](https://git-lfs.com/)
 ```
 mkdir -p models
 cd models
