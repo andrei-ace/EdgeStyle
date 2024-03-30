@@ -153,11 +153,9 @@ python test_text2image_pretrained_openpose.py \
 ![21.5k](docs/pretrained_openpose_21.5k.jpg)
 
 
-### 
+### Tensorboard 
 ```
 tensorboard --logdir models/output_text2image_pretrained_openpose/logs/
-
-[13:31:12<00:00, 24.34s/it, loss=0.00664, lr=1]
 ```
 
 # Running on jetson 
@@ -212,6 +210,10 @@ python3 app.py
 ```
 docker run --runtime nvidia -it --rm --network=host --rm andreiciobanu1984/edgestyle:latest
 ```
+
+![gradio](/docs/demo/gradio.png)
+
+![result](/docs/demo/image.png)
 
 ### Build docker image (Optional)
 ```
