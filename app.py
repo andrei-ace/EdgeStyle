@@ -51,10 +51,10 @@ CLIP_MODEL_NAME_OR_PATH = "./models/clip-vit-large-patch14"
 
 
 NEGATIVE_PROMPT = (
-    r"deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, "
-    "anime, mutated hands and fingers, deformed, distorted, disfigured, poorly drawn, "
-    "bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, "
-    "mutated, ugly, disgusting, amputation,"
+    r"deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, "
+    "cartoon, drawing, anime, mutated hands and fingers, deformed, distorted, "
+    "disfigured, poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, "
+    "floating limbs, disconnected limbs, mutation, mutated, ugly, disgusting, amputation"
 )
 
 PROMT_TO_ADD = (
@@ -156,9 +156,11 @@ def try_on(
     steps,
 ):
     with torch.autocast("cuda"):
+        generator.manual_seed(42)
         prompts = best_embeddings([image_cloth1_clothes])
         image = pipeline(
             prompt=prompts[0] + " " + PROMT_TO_ADD,
+            # prompt=prompts[0],
             guidance_scale=scale,
             image=[
                 IMAGES_TRANSFORMS(image_subject_agnostic).unsqueeze(0),
@@ -171,6 +173,8 @@ def try_on(
             negative_prompt=NEGATIVE_PROMPT,
             num_inference_steps=steps,
             generator=generator,
+            # control_guidance_start=0.0,
+            # control_guidance_end=0.9,
         ).images[0]
     return image
 

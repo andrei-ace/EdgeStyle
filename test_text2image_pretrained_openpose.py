@@ -194,6 +194,17 @@ def parse_args(input_args=None):
         default=False,
         help=("Whether to use the VAE in the controlnet."),
     )
+    parser.add_argument(
+        "--mixed_precision",
+        type=str,
+        default=None,
+        choices=["no", "fp16", "bf16"],
+        help=(
+            "Whether to use mixed precision. Choose between fp16 and bf16 (bfloat16). Bf16 requires PyTorch >="
+            " 1.10.and an Nvidia Ampere GPU.  Default to the value of accelerate config of the current system or the"
+            " flag passed with the `accelerate.launch` command. Use this argument to override the accelerate config."
+        ),
+    )
     if input_args is not None:
         args = parser.parse_args(input_args)
     else:
@@ -203,6 +214,12 @@ def parse_args(input_args=None):
 
 def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    weight_dtype = torch.float32
+    if args.mixed_precision == "fp16":
+        weight_dtype = torch.float16
+    elif args.mixed_precision == "bf16":
+        weight_dtype = torch.bfloat16
 
     tokenizer = AutoTokenizer.from_pretrained(
         args.pretrained_model_name_or_path,
@@ -224,9 +241,13 @@ def main(args):
     unet = UNet2DConditionModel.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="unet",
+        torch_dtype=weight_dtype,
     )
 
-    openpose = ControlNetModel.from_pretrained(args.pretrained_openpose_name_or_path)
+    openpose = ControlNetModel.from_pretrained(
+        args.pretrained_openpose_name_or_path,
+        torch_dtype=weight_dtype,
+    )
 
     controlnet = EdgeStyleMultiControlNetModel.from_pretrained(
         args.controlnet_model_name_or_path,
@@ -247,6 +268,7 @@ def main(args):
         unet=unet,
         controlnet=controlnet,
         safety_checker=None,
+        torch_dtype=weight_dtype,
     )
     pipeline.scheduler = UniPCMultistepScheduler.from_config(pipeline.scheduler.config)
     generator = torch.Generator(device).manual_seed(42)
@@ -293,7 +315,7 @@ def main(args):
 
     prompts = best_embeddings([clothes])
 
-    guidance_scales = np.linspace(3.0, 7.5, NUM_IMAGES)
+    guidance_scales = np.linspace(1.0, 7.0, NUM_IMAGES)
 
     images = [
         subject,

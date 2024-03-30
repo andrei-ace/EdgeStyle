@@ -1,0 +1,17 @@
+python test_text2image_pretrained_openpose.py \
+--pretrained_model_name_or_path="./models/Realistic_Vision_V5.1_noVAE" \
+--pretrained_vae_name_or_path="./models/sd-vae-ft-mse" \
+--pretrained_openpose_name_or_path="./models/control_v11p_sd15_openpose" \
+--controlnet_model_name_or_path="./models/EdgeStyle/controlnet" \
+--controllora_use_vae \
+--mixed_precision fp16 \
+--prompt_text_to_add=", gray background, RAW photo, subject, 8k uhd, dslr, soft lighting, high quality" \
+--negative_prompt="deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime, mutated hands and fingers, deformed, distorted, disfigured, poorly drawn, bad anatomy, wrong anatomy, extra limb, missing limb, floating limbs, disconnected limbs, mutation, mutated, ugly, disgusting, amputation" \
+--source_path="docs/test/source" \
+--source_image_name="1.jpg" \
+--target_path="docs/test/target" \
+--target_image_name="0.jpg" \
+--target_path2="docs/test/target" \
+--target_image_name2="2.jpg" \
+--result_path="docs/test" \
+--image_result_name="result.jpg"
