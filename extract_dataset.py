@@ -101,9 +101,12 @@ def get_prompt(prompt):
 
 score_columns = ["score_" + get_prompt(prompt) for prompt in prompts]
 
-image_quality_assessment = (
-    CLIPImageQualityAssessment(prompts=prompts).to(device=DEVICE).eval()
-)
+
+if __name__ == "__main__":
+    print("Loading CLIP image quality assessment model...")
+    image_quality_assessment = (
+        CLIPImageQualityAssessment(prompts=prompts).to(device=DEVICE).eval()
+    )
 
 
 def create_processed_image(row, final_width=IMAGE_WIDTH, final_height=IMAGE_HEIGHT):

@@ -7,7 +7,6 @@ from diffusers import (
     AutoencoderKL,
     UNet2DConditionModel,
     UniPCMultistepScheduler,
-    ControlNetModel,
     StableDiffusionControlNetPipeline,
 )
 from diffusers.optimization import get_scheduler
@@ -125,6 +124,10 @@ pipeline = pipeline.to(device)
 
 def preprocess(image_subject, image_cloth1, image_cloth2):
     data = process_batch([image_subject, image_cloth1, image_cloth2])
+    if data is None or len(data) < 3:
+        # try again, sometimes first time fails
+        print("Retrying")
+        data = process_batch([image_subject, image_cloth1, image_cloth2])
     data = create_sam_images_for_batch(data)
 
     image_subject_head = data["head_image"].iloc[0]
@@ -173,8 +176,8 @@ def try_on(
             negative_prompt=NEGATIVE_PROMPT,
             num_inference_steps=steps,
             generator=generator,
-            # control_guidance_start=0.0,
-            # control_guidance_end=0.9,
+            # control_guidance_start=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            # control_guidance_end=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
         ).images[0]
     return image
 
@@ -228,7 +231,7 @@ with gr.Blocks() as iface:
             sliderSteps = gr.Slider(
                 minimum=20,
                 maximum=100,
-                value=50,
+                value=20,
                 step=1,
                 label="Inference Steps",
             )

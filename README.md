@@ -210,12 +210,15 @@ python3 app.py
 
 ## Docker image (Recommended)
 ```
-docker run --runtime nvidia -it --rm --network=host --rm andreiciobanu1984/edgestyle:1.0
+docker run --runtime nvidia -it --rm --network=host --rm andreiciobanu1984/edgestyle:latest
 ```
 
 ### Build docker image (Optional)
 ```
-docker build -t andreiciobanu1984/edgestyle:1.0 .
+docker build -t andreiciobanu1984/edgestyle:1.1 .
+docker tag andreiciobanu1984/edgestyle:1.1 andreiciobanu1984/edgestyle:latest
+docker push andreiciobanu1984/edgestyle:1.1
+docker push andreiciobanu1984/edgestyle:latest
 ```
 
 ## ONNX

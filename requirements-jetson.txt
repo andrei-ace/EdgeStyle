@@ -22,7 +22,7 @@ ultralytics
 datasets
 transformers
 accelerate
-diffusers
+diffusers==0.26.3
 smmap
 gitdb
 gitpython
