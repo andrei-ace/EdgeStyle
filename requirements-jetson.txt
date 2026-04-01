@@ -9,7 +9,7 @@ pandas
 controlnet-aux 
 tqdm
 torchpack
-onnx==1.17.0
+onnx==1.21.0
 onnxruntime-gpu==1.15.1
 optimum
 onnxsim
